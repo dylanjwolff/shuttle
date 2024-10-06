@@ -1,6 +1,7 @@
 //! A counting semaphore supporting both async and sync operations.
 use crate::current;
 use crate::runtime::execution::ExecutionState;
+use crate::runtime::task::Event;
 use crate::runtime::task::{clock::VectorClock, TaskId};
 use crate::runtime::thread;
 use std::cell::RefCell;
@@ -394,6 +395,13 @@ impl BatchSemaphore {
         // we have, this is to let other threads fail their `try_acquire`;
         // if we have not, we yield so that the current thread can try again
         // after other threads have worked.
+        ExecutionState::with(|s| {
+            s.current_mut().next_event = Event {
+                id : std::ptr::addr_of!(self) as usize,
+                is_write : true,
+                is_read : true,
+            }
+        });
         thread::switch();
 
         res

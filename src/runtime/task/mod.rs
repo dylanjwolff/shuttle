@@ -146,12 +146,30 @@ where
     }
 }
 
+#[derive(Debug)]
+pub struct Event {
+    pub(crate) id : usize,
+    pub(crate) is_write : bool,
+    pub(crate) is_read : bool,
+}
+
+impl Event {
+    fn default() -> Event {
+        return Event {
+            id : 0,
+            is_write : false,
+            is_read : false,
+        }
+    }
+}
+
 /// A `Task` represents a user-level unit of concurrency. Each task has an `id` that is unique within
 /// the execution, and a `state` reflecting whether the task is runnable (enabled) or not.
 #[derive(Debug)]
 pub struct Task {
     pub(super) id: TaskId,
     pub(super) state: TaskState,
+    pub(crate) next_event : Event,
     pub(super) detached: bool,
     park_state: ParkState,
 
@@ -220,9 +238,12 @@ impl Task {
         // be tried.
         let span_stack = vec![step_span.clone()];
 
+        let next_event = Event::default();
+
         let mut task = Self {
             id,
             state: TaskState::Runnable,
+            next_event,
             continuation,
             clock,
             waiter: None,
