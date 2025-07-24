@@ -146,6 +146,18 @@ where
     }
 }
 
+#[derive(Debug)]
+pub struct Event {
+    /// Identifier for an event; e.g. an instruction address or hash of the source file + line
+    pub event_id : usize,
+    /// Identifier for the resource being accessed by this event; e.g. a memory address or object id
+    pub resource_id : usize,
+    /// Is the event a destructive access?
+    pub is_write : bool,
+    /// Does the event read the value of the resource?
+    pub is_read: bool,
+}
+
 /// A `Task` represents a user-level unit of concurrency. Each task has an `id` that is unique within
 /// the execution, and a `state` reflecting whether the task is runnable (enabled) or not.
 #[derive(Debug)]
@@ -188,6 +200,10 @@ pub struct Task {
     // Arbitrarily settable tag which is inherited from the parent.
     #[allow(deprecated)]
     tag: Option<Arc<dyn Tag>>,
+
+    /// The next event to be executed when this task resumes
+    pub next_event : Option<Event>,
+
 }
 
 #[allow(deprecated)]
@@ -232,6 +248,7 @@ impl Task {
             span_stack,
             local_storage: StorageMap::new(),
             tag: None,
+            next_event: None,
         };
 
         if let Some(tag) = tag {

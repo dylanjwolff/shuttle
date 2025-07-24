@@ -101,6 +101,12 @@ impl Scheduler for RandomScheduler {
     }
 
     fn next_task(&mut self, runnable: &[&Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+        for t in runnable {
+            if let Some(ne) = &t.next_event {
+                println!("[{:?}] has next {:?}", t.id(), ne);
+            }
+        }
+
         Some(runnable.choose(&mut self.rng).unwrap().id())
     }
 

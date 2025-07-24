@@ -1,6 +1,7 @@
 use crate::current;
 use crate::future::batch_semaphore::{BatchSemaphore, Fairness};
-use crate::runtime::task::TaskId;
+use crate::runtime::execution::ExecutionState;
+use crate::runtime::task::{Event, TaskId};
 use std::cell::RefCell;
 use std::fmt::{Debug, Display};
 use std::ops::{Deref, DerefMut};
@@ -47,6 +48,19 @@ impl<T: ?Sized> Mutex<T> {
         trace!(holder=?state.holder, semaphore=?self.semaphore, "waiting to acquire mutex {:p}", self);
         drop(state);
 
+
+        if let Some(id) = current::try_get_current_task() {
+            ExecutionState::try_with(|s| {
+                let t = s.get_mut(id);
+                t.next_event = Some(Event {
+                    event_id : 0,
+                    resource_id  : std::ptr::addr_of!(self) as usize,
+                    is_write : true,
+                    is_read : true,
+                });
+            });
+        }
+
         if !self.semaphore.is_closed() {
             // Detect deadlock due to re-entrancy.
             state = self.state.borrow_mut();
@@ -81,6 +95,13 @@ impl<T: ?Sized> Mutex<T> {
             })),
             Err(TryLockError::WouldBlock) => unreachable!("mutex state out of sync"),
         };
+
+        if let Some(id) = current::try_get_current_task() {
+            ExecutionState::try_with(|s| {
+                let t = s.get_mut(id);
+                t.next_event = None;
+            });
+        }
 
         result
     }

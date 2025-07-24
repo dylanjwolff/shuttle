@@ -85,6 +85,11 @@ pub fn set_name_for_task(task_id: TaskId, task_name: impl Into<TaskName>) -> Opt
     set_label_for_task::<TaskName>(task_id, task_name)
 }
 
+/// Gets the `TaskId` of the current task, or `None` if there is no execution state OR current task.
+pub fn try_get_current_task() -> Option<TaskId> {
+    ExecutionState::try_with(|s| Some(s.try_current()?.id())).flatten()
+}
+
 /// Gets the `TaskId` of the current task, or `None` if there is no current task.
 pub fn get_current_task() -> Option<TaskId> {
     ExecutionState::with(|s| Some(s.try_current()?.id()))
