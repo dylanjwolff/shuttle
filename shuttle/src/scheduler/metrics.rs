@@ -89,15 +89,14 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
-        let mut runnable_tasks = tasks.iter().filter(|t| t.schedulable());
         let choice = self.inner.next_task(tasks, current_task, is_yielding)?;
 
         self.steps += 1;
         if choice != self.last_task {
             self.context_switches += 1;
-            if runnable_tasks.any(|t| t.id() == self.last_task) {
-                self.preemptions += 1;
-            }
+            // if tasks.iter().find(|e| e.id() == self.last_task && e.schedulable()).is_some() {
+            //    self.preemptions += 1;
+            // }
         }
         self.last_task = choice;
 
