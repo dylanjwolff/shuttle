@@ -312,6 +312,11 @@ impl Task {
         self.id
     }
 
+    /// Can the task be scheduled?
+    pub fn schedulable(&self) -> bool {
+        return self.runnable() || self.can_spuriously_wakeup();
+    }
+
     pub(crate) fn runnable(&self) -> bool {
         self.state == TaskState::Runnable
     }

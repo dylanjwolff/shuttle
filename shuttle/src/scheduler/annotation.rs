@@ -25,12 +25,12 @@ impl<S: Scheduler> Scheduler for AnnotationScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &mut dyn Iterator<Item = &Task>,
+        tasks: &[Task],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
-        let runnable_tasks: Vec<&Task> = runnable_tasks.collect();
-        let choice = self.0.next_task(&mut runnable_tasks.iter().copied(), current_task, is_yielding)?;
+        let choice = self.0.next_task(tasks, current_task, is_yielding)?;
+        let runnable_tasks: Vec<&Task> = tasks.iter().filter(|t| t.schedulable()).collect();
         record_schedule(choice, &runnable_tasks);
         Some(choice)
     }

@@ -76,8 +76,8 @@ impl Scheduler for ReplayScheduler {
         }
     }
 
-    fn next_task(&mut self, runnable: &mut dyn Iterator<Item = &Task>, _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
-        let runnable: Vec<&Task> = runnable.collect();
+    fn next_task(&mut self, tasks: &[Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+        let runnable: Vec<&Task> = tasks.iter().filter(|t| t.schedulable()).collect();
         loop {
             if self.steps >= self.schedule.steps.len() {
                 assert!(self.allow_incomplete, "schedule ended early");

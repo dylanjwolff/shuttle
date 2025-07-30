@@ -3,9 +3,9 @@ use crate::scheduler::data::random::RandomDataSource;
 use crate::scheduler::data::DataSource;
 use crate::scheduler::{Schedule, Scheduler};
 use rand::rngs::OsRng;
+use rand::seq::IteratorRandom;
 use rand::{RngCore, SeedableRng};
 use rand_pcg::Pcg64Mcg;
-use rand::prelude::IteratorRandom;
 
 /// A scheduler that randomly chooses a runnable task at each context switch.
 ///
@@ -100,7 +100,8 @@ impl Scheduler for RandomScheduler {
         }
     }
 
-    fn next_task(&mut self, runnable: &mut dyn Iterator<Item = &Task>, _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+    fn next_task(&mut self, tasks: &[Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+        let runnable = tasks.iter().filter(|t| t.schedulable());
         Some(runnable.choose(&mut self.rng).unwrap().id())
     }
 

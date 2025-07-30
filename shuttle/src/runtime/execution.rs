@@ -683,19 +683,12 @@ impl ExecutionState {
             return Ok(());
         }
 
-        // Some blocked tasks can be woken up spuriously, even though the condition the task is
-        // blocked on hasn't happened yet. We'll add such tasks to the list of runnable tasks, but
-        // they won't contribute to the check on `runnable.is_empty()` if the only runnable tasks
-        // are ones that are waiting for a potential spurious wakeup, it should still be treated as
-        // a deadlock since there's no guarantee that spurious wakeups will ever occur.
-        let mut runnable_incl_spurious_tasks= self.tasks.iter().filter(|t| t.runnable() || t.can_spuriously_wakeup());
-
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
 
         self.next_task = self
             .scheduler
             .borrow_mut()
-            .next_task(&mut runnable_incl_spurious_tasks, self.current_task.id(), is_yielding)
+            .next_task(&self.tasks, self.current_task.id(), is_yielding)
             .map(ScheduledTask::Some)
             .unwrap_or(ScheduledTask::Stopped);
 

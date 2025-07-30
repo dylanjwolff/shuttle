@@ -85,17 +85,17 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &mut dyn Iterator<Item = &Task>,
+        tasks: &[Task],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
-        let runnable_tasks: Vec<&Task> = runnable_tasks.collect();
-        let choice = self.inner.next_task(&mut runnable_tasks.iter().copied(), current_task, is_yielding)?;
+        let mut runnable_tasks = tasks.iter().filter(|t| t.schedulable());
+        let choice = self.inner.next_task(tasks, current_task, is_yielding)?;
 
         self.steps += 1;
         if choice != self.last_task {
             self.context_switches += 1;
-            if runnable_tasks.iter().any(|t| t.id() == self.last_task) {
+            if runnable_tasks.any(|t| t.id() == self.last_task) {
                 self.preemptions += 1;
             }
         }
