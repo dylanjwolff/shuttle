@@ -663,12 +663,19 @@ impl ExecutionState {
         }
 
         let mut unfinished_attached = false;
-        let mut runnable = self
+        let mut all_runnable_are_detached = true;
+        let mut runnable_count = 0;
+        let runnable = self
             .tasks
             .iter()
-            .inspect(|t| unfinished_attached = unfinished_attached || (!t.finished() && !t.detached))
-            .filter(|t| t.runnable())
-            .map(|t| t.id)
+            .inspect(|t| {
+                unfinished_attached = unfinished_attached || (!t.finished() && !t.detached);
+                if t.runnable() {
+                    all_runnable_are_detached = all_runnable_are_detached && t.detached;
+                    runnable_count += 1;
+                }
+            })
+            .filter(|t| t.runnable() || t.can_spuriously_wakeup())
             .collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>();
 
         // We should finish execution when either
@@ -676,7 +683,7 @@ impl ExecutionState {
         // (2) All runnable tasks have been detached AND there are no unfinished attached tasks
         // If there are some unfinished attached tasks and all runnable tasks are detached, we must
         // run some detached task to give them a chance to unblock some unfinished attached task.
-        if runnable.is_empty() || (!unfinished_attached && runnable.iter().all(|id| self.get(*id).detached)) {
+        if runnable_count == 0 || (!unfinished_attached && all_runnable_are_detached) {
             self.next_task = ScheduledTask::Finished;
             return Ok(());
         }
@@ -686,21 +693,16 @@ impl ExecutionState {
         // they won't contribute to the check on `runnable.is_empty()` if the only runnable tasks
         // are ones that are waiting for a potential spurious wakeup, it should still be treated as
         // a deadlock since there's no guarantee that spurious wakeups will ever occur.
-        runnable.extend(self.tasks.iter().filter(|t| t.can_spuriously_wakeup()).map(|t| t.id));
 
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
 
-        let runnable_tasks = runnable
-            .iter()
-            .map(|id| self.tasks.get(id.0).unwrap())
-            .collect::<SmallVec<[&Task; DEFAULT_INLINE_TASKS]>>();
         self.next_task = self
             .scheduler
             .borrow_mut()
-            .next_task(&runnable_tasks, self.current_task.id(), is_yielding)
+            .next_task(&runnable, self.current_task.id(), is_yielding)
             .map(ScheduledTask::Some)
             .unwrap_or(ScheduledTask::Stopped);
-        drop(runnable_tasks);
+        drop(runnable);
 
         // If the task chosen by the scheduler is blocked, then it should be one that can be
         // spuriously woken up, and we need to unblock it here so that it can execute.
@@ -722,7 +724,7 @@ impl ExecutionState {
         // Note also that changing this trace! statement requires changing the test `basic::labels::test_tracing_with_label_fn`
         // which relies on this trace reporting the `runnable` tasks.
         self.top_level_span
-            .in_scope(|| trace!(i=self.current_schedule.len(), next_task=?self.next_task, ?runnable));
+            .in_scope(|| trace!(i=self.current_schedule.len(), next_task=?self.next_task));
 
         Ok(())
     }
