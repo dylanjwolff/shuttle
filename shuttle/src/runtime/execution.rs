@@ -663,27 +663,21 @@ impl ExecutionState {
         }
 
         let mut unfinished_attached = false;
-        let mut all_runnable_are_detached = true;
-        let mut runnable_count = 0;
-        let runnable = self
-            .tasks
-            .iter()
-            .inspect(|t| {
-                unfinished_attached = unfinished_attached || (!t.finished() && !t.detached);
-                if t.runnable() {
-                    all_runnable_are_detached = all_runnable_are_detached && t.detached;
-                    runnable_count += 1;
-                }
-            })
-            .filter(|t| t.runnable() || t.can_spuriously_wakeup())
-            .collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>();
+        let mut runnable = SmallVec::<[&Task; DEFAULT_INLINE_TASKS]>::new();
+        let mut all_runnable_detached = true;
 
-        // We should finish execution when either
-        // (1) There are no runnable tasks, or
-        // (2) All runnable tasks have been detached AND there are no unfinished attached tasks
-        // If there are some unfinished attached tasks and all runnable tasks are detached, we must
-        // run some detached task to give them a chance to unblock some unfinished attached task.
-        if runnable_count == 0 || (!unfinished_attached && all_runnable_are_detached) {
+        for task in &self.tasks {
+            unfinished_attached |= !task.finished() && !task.detached; 
+            
+            if task.runnable() {
+                all_runnable_detached &= task.detached;
+                runnable.push(task);
+            } else if task.can_spuriously_wakeup() {
+                runnable.push(task);
+            }
+        }
+
+        if runnable.is_empty() || (!unfinished_attached && all_runnable_detached) {
             self.next_task = ScheduledTask::Finished;
             return Ok(());
         }
