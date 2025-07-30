@@ -24,6 +24,8 @@ pub(crate) struct MetricsScheduler<S: ?Sized + Scheduler> {
 
     random_choices: usize,
     random_choices_metric: CountSummaryMetric,
+
+    task_buffer: Vec<*const Task>,
 }
 
 impl<S: Scheduler> MetricsScheduler<S> {
@@ -46,6 +48,8 @@ impl<S: Scheduler> MetricsScheduler<S> {
 
             random_choices: 0,
             random_choices_metric: CountSummaryMetric::new(),
+
+            task_buffer: Vec::new(),
         }
     }
 }
@@ -89,13 +93,14 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
-        let runnable_tasks: Vec<&Task> = runnable_tasks.collect();
-        let choice = self.inner.next_task(&mut runnable_tasks.iter().copied(), current_task, is_yielding)?;
+        self.task_buffer.clear();
+        self.task_buffer.extend(runnable_tasks.map(|t| t as *const Task));
+        let choice = self.inner.next_task(&mut self.task_buffer.iter().map(|&ptr| unsafe { &*ptr }), current_task, is_yielding)?;
 
         self.steps += 1;
         if choice != self.last_task {
             self.context_switches += 1;
-            if runnable_tasks.iter().any(|t| t.id() == self.last_task) {
+            if self.task_buffer.iter().any(|&ptr| unsafe { (*ptr).id() == self.last_task }) {
                 self.preemptions += 1;
             }
         }
