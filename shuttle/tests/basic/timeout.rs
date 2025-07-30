@@ -27,11 +27,11 @@ impl<S: Scheduler> Scheduler for SleepableScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &mut dyn Iterator<Item = &Task>,
+        tasks: &[Task],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
-        self.scheduler.next_task(runnable_tasks, current_task, is_yielding)
+        self.scheduler.next_task(tasks, current_task, is_yielding)
     }
 
     fn next_u64(&mut self) -> u64 {

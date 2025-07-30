@@ -127,7 +127,7 @@ fn max_steps_early_exit_scheduler() {
 
         fn next_task(
             &mut self,
-            runnable_tasks: &mut dyn Iterator<Item = &Task>,
+            tasks: &[Task],
             _current_task: Option<TaskId>,
             _is_yielding: bool,
         ) -> Option<TaskId> {
@@ -135,7 +135,7 @@ fn max_steps_early_exit_scheduler() {
                 None
             } else {
                 self.steps += 1;
-                let runnable_tasks: Vec<&Task> = runnable_tasks.collect();
+                let runnable_tasks: Vec<&Task> = tasks.iter().filter(|t| t.schedulable()).collect();
                 Some(runnable_tasks.first().unwrap().id())
             }
         }
