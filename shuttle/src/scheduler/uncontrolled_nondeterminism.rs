@@ -60,12 +60,13 @@ impl<S: Scheduler> Scheduler for UncontrolledNondeterminismCheckScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &mut dyn Iterator<Item = &Task>,
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
+        let runnable_tasks: Vec<&Task> = runnable_tasks.collect();
         if self.recording {
-            let choice = self.scheduler.next_task(runnable_tasks, current_task, is_yielding);
+            let choice = self.scheduler.next_task(&mut runnable_tasks.iter().copied(), current_task, is_yielding);
             let runnable_ids = runnable_tasks
                 .iter()
                 .map(|t| t.id())

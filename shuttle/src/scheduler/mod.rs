@@ -91,7 +91,7 @@ pub trait Scheduler {
     /// deterministic replay.
     fn new_execution(&mut self) -> Option<Schedule>;
 
-    /// Decide which task to run next, given a list of runnable tasks and the currently running
+    /// Decide which task to run next, given an unrealized iterator of runnable tasks and the currently running
     /// tasks. This method returns `Some(task)` where `task` is the runnable task to be executed
     /// next; it may also return `None`, indicating that the execution engine should stop exploring
     /// the current schedule.
@@ -99,11 +99,11 @@ pub trait Scheduler {
     /// `is_yielding` is a hint to the scheduler that `current_task` has asked to yield (e.g.,
     /// during a spin loop) and should be deprioritized.
     ///
-    /// The list of runnable tasks is guaranteed to be non-empty. If `current_task` is `None`, the
+    /// The iterator of runnable tasks is guaranteed to be non-empty. If `current_task` is `None`, the
     /// execution has not yet begun.
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &mut dyn Iterator<Item = &Task>,
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId>;
@@ -119,7 +119,7 @@ impl Scheduler for Box<dyn Scheduler + Send> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &mut dyn Iterator<Item = &Task>,
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
@@ -130,3 +130,5 @@ impl Scheduler for Box<dyn Scheduler + Send> {
         self.as_mut().next_u64()
     }
 }
+
+

@@ -122,7 +122,8 @@ impl Scheduler for PctScheduler {
         Some(Schedule::new(self.data_source.reinitialize()))
     }
 
-    fn next_task(&mut self, runnable: &[&Task], current: Option<TaskId>, is_yielding: bool) -> Option<TaskId> {
+    fn next_task(&mut self, runnable: &mut dyn Iterator<Item = &Task>, current: Option<TaskId>, is_yielding: bool) -> Option<TaskId> {
+        let runnable: Vec<&Task> = runnable.collect();
         // If any new tasks were created, assign them priorities by randomly swapping them with an
         // existing task's priority, so we maintain the invariant that every priority is distinct
         let max_known_task = self.priorities.len();

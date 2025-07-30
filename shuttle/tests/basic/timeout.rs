@@ -27,7 +27,7 @@ impl<S: Scheduler> Scheduler for SleepableScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &mut dyn Iterator<Item = &Task>,
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {

@@ -100,7 +100,8 @@ impl Scheduler for RandomScheduler {
         }
     }
 
-    fn next_task(&mut self, runnable: &[&Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+    fn next_task(&mut self, runnable: &mut dyn Iterator<Item = &Task>, _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+        let runnable: Vec<&Task> = runnable.collect();
         Some(runnable.choose(&mut self.rng).unwrap().id())
     }
 

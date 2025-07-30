@@ -33,7 +33,8 @@ impl Scheduler for RoundRobinScheduler {
         }
     }
 
-    fn next_task(&mut self, runnable: &[&Task], current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+    fn next_task(&mut self, runnable: &mut dyn Iterator<Item = &Task>, current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+        let runnable: Vec<&Task> = runnable.collect();
         if current.is_none() {
             return Some(runnable.first().unwrap().id());
         }
