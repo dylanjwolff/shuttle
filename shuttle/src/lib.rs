@@ -1,5 +1,4 @@
 #![deny(warnings, missing_debug_implementations, missing_docs)]
-
 //! Shuttle is a library for testing concurrent Rust code, heavily inspired by [Loom][].
 //!
 //! Shuttle focuses on randomized testing, rather than the exhaustive testing that Loom offers. This
@@ -558,3 +557,8 @@ macro_rules! __lazy_static_internal {
     };
     () => ()
 }
+
+// Fail compilation if tests are run without vector-clocks feature
+#[cfg(all(test, not(feature = "vector-clocks")))]
+compile_error!("Tests require the 'vector-clocks' feature. Run with: cargo test --features vector-clocks");
+
