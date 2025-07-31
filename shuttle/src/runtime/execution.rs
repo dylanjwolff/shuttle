@@ -663,22 +663,19 @@ impl ExecutionState {
         }
 
         let mut unfinished_attached = false;
-        let mut total_runnable = 0;
         let mut all_runnable_detached = true;
-        for t in &self.tasks {
-            unfinished_attached = unfinished_attached || (!t.finished() && !t.detached);
-            if t.runnable() {
-                total_runnable += 1;
-                all_runnable_detached = all_runnable_detached && self.get(t.id).detached;
-            }
+        let mut has_runnable= false;
+
+        for task in &self.tasks {
+            unfinished_attached |= !task.finished() && !task.detached; 
+            
+            let is_runnable = task.runnable();
+            has_runnable |= task.runnable();
+            let isnt_runnable_attached= !is_runnable || task.detached; 
+            all_runnable_detached &= isnt_runnable_attached;
         }
 
-        // We should finish execution when either
-        // (1) There are no runnable tasks, or
-        // (2) All runnable tasks have been detached AND there are no unfinished attached tasks
-        // If there are some unfinished attached tasks and all runnable tasks are detached, we must
-        // run some detached task to give them a chance to unblock some unfinished attached task.
-        if total_runnable == 0 || (!unfinished_attached && all_runnable_detached) {
+        if !has_runnable || (!unfinished_attached && all_runnable_detached) {
             self.next_task = ScheduledTask::Finished;
             return Ok(());
         }
