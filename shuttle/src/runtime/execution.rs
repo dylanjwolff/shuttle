@@ -665,11 +665,14 @@ impl ExecutionState {
         let mut unfinished_attached = false;
         let mut runnable = SmallVec::<[&Task; DEFAULT_INLINE_TASKS]>::new();
         let mut all_runnable_detached = true;
+        let mut has_runnable = false;
 
         for task in &self.tasks {
             unfinished_attached |= !task.finished() && !task.detached; 
+            let is_runnable = task.runnable();
+            has_runnable |= is_runnable;
             
-            if task.runnable() {
+            if is_runnable {
                 all_runnable_detached &= task.detached;
                 runnable.push(task);
             } else if task.can_spuriously_wakeup() {
@@ -677,7 +680,7 @@ impl ExecutionState {
             }
         }
 
-        if runnable.is_empty() || (!unfinished_attached && all_runnable_detached) {
+        if !has_runnable || (!unfinished_attached && all_runnable_detached) {
             self.next_task = ScheduledTask::Finished;
             return Ok(());
         }
@@ -696,6 +699,25 @@ impl ExecutionState {
             .next_task(&runnable, self.current_task.id(), is_yielding)
             .map(ScheduledTask::Some)
             .unwrap_or(ScheduledTask::Stopped);
+
+        // Tracing this `in_scope` is purely a matter of taste. We do it because
+        // 1) It is an action taken by the scheduler, and should thus be traced under the scheduler's span
+        // 2) It creates a visual separation of scheduling decisions and `Task`-induced tracing.
+        // Note that there is a case to be made for not `in_scope`-ing it, as that makes seeing the context
+        // of the context switch clearer.
+        //
+        // Note also that changing this trace! statement requires changing the test `basic::labels::test_tracing_with_label_fn`
+        // which relies on this trace reporting the `runnable` tasks.
+        self.top_level_span
+            .in_scope(|| {
+                trace!(
+                    i=self.current_schedule.len(), 
+                    next_task=?self.next_task,
+                    runnable=?runnable.iter()
+                        .filter(|t| t.runnable() || matches!(self.next_task.id(), Some(id) if id == t.id))
+                        .map(|t|t.id).collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>()
+                );
+            });
         drop(runnable);
 
         // If the task chosen by the scheduler is blocked, then it should be one that can be
@@ -708,17 +730,6 @@ impl ExecutionState {
                 task.unblock();
             }
         }
-
-        // Tracing this `in_scope` is purely a matter of taste. We do it because
-        // 1) It is an action taken by the scheduler, and should thus be traced under the scheduler's span
-        // 2) It creates a visual separation of scheduling decisions and `Task`-induced tracing.
-        // Note that there is a case to be made for not `in_scope`-ing it, as that makes seeing the context
-        // of the context switch clearer.
-        //
-        // Note also that changing this trace! statement requires changing the test `basic::labels::test_tracing_with_label_fn`
-        // which relies on this trace reporting the `runnable` tasks.
-        self.top_level_span
-            .in_scope(|| trace!(i=self.current_schedule.len(), next_task=?self.next_task));
 
         Ok(())
     }
