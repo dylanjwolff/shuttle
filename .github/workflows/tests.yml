@@ -46,16 +46,6 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets -- -D clippy::all
 
-  bench:
-    name: Benchmarks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install Rust
-        run: rustup update stable
-      - name: cargo bench
-        run: cargo bench --features bench-no-vector-clocks
-
   docs:
     name: Docs
     runs-on: ubuntu-latest
@@ -65,3 +55,17 @@ jobs:
         run: rustup update stable
       - name: cargo doc
         run: cargo doc --no-deps
+
+  bench:
+    name: run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust
+        run: rustup update stable
+      - uses: boa-dev/criterion-compare-action@v3
+        with:
+          # Optional. Features activated in the benchmark
+          features: "bench-no-vector-clocks"
+          # Needed. The name of the branch to compare with. This default uses the branch which is being pulled against
+          branchName: ${{ github.base_ref }}
