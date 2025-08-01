@@ -65,6 +65,6 @@ jobs:
         run: rustup update stable
       - uses: boa-dev/criterion-compare-action@v3
         with:
-          package: "shuttle"
+          cwd: "shuttle"
           features: "bench-no-vector-clocks"
           branchName: ${{ github.base_ref }}
