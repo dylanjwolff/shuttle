@@ -65,7 +65,6 @@ jobs:
         run: rustup update stable
       - uses: boa-dev/criterion-compare-action@v3
         with:
-          # Optional. Features activated in the benchmark
+          package: "shuttle"
           features: "bench-no-vector-clocks"
-          # Needed. The name of the branch to compare with. This default uses the branch which is being pulled against
           branchName: ${{ github.base_ref }}
