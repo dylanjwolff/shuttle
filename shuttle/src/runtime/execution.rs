@@ -262,6 +262,10 @@ pub(crate) struct ExecutionState {
 
     // The `Span` which the `ExecutionState` was created under. Will be the parent of all `Task` `Span`s
     pub(crate) top_level_span: Span,
+
+    // Persistent Vec used as a i.e. bump allocator for references to runnable tasks to avoid slow allocation
+    // on each scheduling decision. Should not be used outside of the `schedule` function
+    runnable_tasks: Vec<*const Task>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -302,6 +306,7 @@ impl ExecutionState {
             #[cfg(debug_assertions)]
             has_cleaned_up: false,
             top_level_span: tracing::Span::current(),
+            runnable_tasks: Vec::with_capacity(DEFAULT_INLINE_TASKS),
         }
     }
 
@@ -663,7 +668,6 @@ impl ExecutionState {
         }
 
         let mut unfinished_attached = false;
-        let mut runnable = SmallVec::<[&Task; DEFAULT_INLINE_TASKS]>::new();
         let mut all_runnable_detached = true;
         let mut has_runnable = false;
 
@@ -674,12 +678,17 @@ impl ExecutionState {
             
             if is_runnable {
                 all_runnable_detached &= task.detached;
-                runnable.push(task);
+                self.runnable_tasks.push(task as *const Task);
             } else if task.can_spuriously_wakeup() {
-                runnable.push(task);
+                self.runnable_tasks.push(task as *const Task);
             }
         }
 
+        // We should finish execution when either
+        // (1) There are no runnable tasks, or
+        // (2) All runnable tasks have been detached AND there are no unfinished attached tasks
+        // If there are some unfinished attached tasks and all runnable tasks are detached, we must
+        // run some detached task to give them a chance to unblock some unfinished attached task.
         if !has_runnable || (!unfinished_attached && all_runnable_detached) {
             self.next_task = ScheduledTask::Finished;
             return Ok(());
@@ -693,10 +702,15 @@ impl ExecutionState {
 
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
 
+        // Cast the slice of raw pointers to a slice of references in place to provide schedulers with a safe API
+        // This is safe because the tasks themselves are only being accessed through this shared reference by the
+        // schedulers, and all references are always cleared from the runnable_tasks Vec at the end of this function.
+        let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks) };
+
         self.next_task = self
             .scheduler
             .borrow_mut()
-            .next_task(&runnable, self.current_task.id(), is_yielding)
+            .next_task(task_refs, self.current_task.id(), is_yielding)
             .map(ScheduledTask::Some)
             .unwrap_or(ScheduledTask::Stopped);
 
@@ -713,12 +727,11 @@ impl ExecutionState {
                 trace!(
                     i=self.current_schedule.len(), 
                     next_task=?self.next_task,
-                    runnable=?runnable.iter()
+                    runnable=?task_refs.iter()
                         .filter(|t| t.runnable() || matches!(self.next_task.id(), Some(id) if id == t.id))
                         .map(|t|t.id).collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>()
                 );
             });
-        drop(runnable);
 
         // If the task chosen by the scheduler is blocked, then it should be one that can be
         // spuriously woken up, and we need to unblock it here so that it can execute.
@@ -730,6 +743,8 @@ impl ExecutionState {
                 task.unblock();
             }
         }
+
+        self.runnable_tasks.clear();
 
         Ok(())
     }
