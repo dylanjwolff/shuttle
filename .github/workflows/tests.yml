@@ -57,7 +57,7 @@ jobs:
         run: cargo doc --no-deps
 
   bench:
-    name: run benchmarks
+    name: Benchmarks 
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
