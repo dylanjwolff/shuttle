@@ -7,13 +7,16 @@ use crate::runtime::thread::continuation::PooledContinuation;
 use crate::scheduler::{Schedule, Scheduler};
 use crate::thread::thread_fn;
 use crate::{Config, MaxSteps};
+use std::ptr::addr_of;
+
 use scoped_tls::scoped_thread_local;
 use smallvec::SmallVec;
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::panic;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -289,6 +292,33 @@ impl ScheduledTask {
     }
 }
 
+#[inline]
+fn get_signature(state: &ExecutionState, code_identifier: impl Hash) -> u64 {
+    // use rapidhash::fast::RapidHasher;
+    // let mut hasher = RapidHasher::default();
+    use std::hash::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+
+    const FULL_CALLSTACK: bool = false;
+    if FULL_CALLSTACK {
+        use std::backtrace::{Backtrace, BacktraceStatus};
+        let bt = Backtrace::force_capture();
+        return if bt.status() == BacktraceStatus::Captured {
+            bt.to_string().hash(&mut hasher);
+            hasher.finish()
+        } else {
+            0
+        };
+    } else {
+        let caller = std::panic::Location::caller();
+        let parent = state.current_task.id();
+        code_identifier.hash(&mut hasher);
+        parent.hash(&mut hasher);
+        caller.hash(&mut hasher);
+        return hasher.finish();
+    }
+}
+
 impl ExecutionState {
     fn new(config: Config, scheduler: Rc<RefCell<dyn Scheduler>>, initial_schedule: Schedule) -> Self {
         Self {
@@ -375,6 +405,7 @@ impl ExecutionState {
 
     /// Spawn a new task for a future. This doesn't create a yield point; the caller should do that
     /// if it wants to give the new task a chance to run immediately.
+    #[track_caller]
     pub(crate) fn spawn_future<F>(future: F, stack_size: usize, name: Option<String>) -> TaskId
     where
         F: Future<Output = ()> + 'static,
@@ -385,6 +416,9 @@ impl ExecutionState {
 
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
+
+            let code_id= TypeId::of::<F>();
+            let _signature = get_signature(state, code_id);
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
@@ -411,6 +445,7 @@ impl ExecutionState {
         task_id
     }
 
+    #[track_caller]
     pub(crate) fn spawn_thread(
         f: Box<dyn FnOnce() + 'static>,
         stack_size: usize,
@@ -421,6 +456,9 @@ impl ExecutionState {
             let parent_span_id = state.top_level_span.id();
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
+
+            let address = addr_of!(*f) as *const () as usize;
+            let _signature = get_signature(state, address);
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
