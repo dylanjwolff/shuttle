@@ -240,11 +240,19 @@ pub struct Config {
     /// a `Subscriber` which overwrites on calls to `record()` and want to display the current step
     /// count.
     pub record_steps_in_span: bool,
+
+    /// Whether to enable vector clocks for tracking causal dependencies between tasks.
+    /// Can be controlled via the SHUTTLE_VECTOR_CLOCKS environment variable.
+    pub vector_clocks: bool,
 }
 
 impl Config {
     /// Create a new default configuration
     pub fn new() -> Self {
+        let vector_clocks = std::env::var("SHUTTLE_VECTOR_CLOCKS")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+
         Self {
             stack_size: 0x8000,
             failure_persistence: FailurePersistence::Print,
@@ -252,6 +260,7 @@ impl Config {
             max_time: None,
             silence_warnings: false,
             record_steps_in_span: false,
+            vector_clocks,
         }
     }
 }

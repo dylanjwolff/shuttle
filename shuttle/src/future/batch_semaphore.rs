@@ -99,7 +99,7 @@ impl PermitsAvailable {
         Self {
             num_available: num_permits,
             permit_clocks: None,
-            last_acquire: VectorClock::new(),
+            last_acquire: VectorClock::const_new(),
         }
     }
 

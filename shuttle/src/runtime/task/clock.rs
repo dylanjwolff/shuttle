@@ -1,160 +1,115 @@
-use crate::runtime::task::TaskId;
+use crate::runtime::{execution::ExecutionState, task::TaskId};
 use std::cmp::{Ordering, PartialOrd};
 
-#[cfg(all(any(test, feature = "vector-clocks"), not(feature = "bench-no-vector-clocks")))]
-mod vector_clock {
-    use super::*;
-    use crate::runtime::task::DEFAULT_INLINE_TASKS;
-    use smallvec::{smallvec, SmallVec};
+use crate::runtime::task::DEFAULT_INLINE_TASKS;
+use smallvec::{smallvec, SmallVec};
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct VectorClock {
-        pub(crate) time: SmallVec<[u32; DEFAULT_INLINE_TASKS]>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VectorClock {
+    time: Option<SmallVec<[u32; DEFAULT_INLINE_TASKS]>>,
+}
+
+impl VectorClock {
+    pub(crate) fn new() -> Self {
+        Self::new_enabled(ExecutionState::use_vector_clocks())
+    }
+    pub(crate) const fn const_new() -> Self {
+        Self {
+            time: Some(SmallVec::new_const()),
+        }
     }
 
-    impl VectorClock {
-        pub(crate) const fn new() -> Self {
-            Self {
-                time: SmallVec::new_const(),
-            }
+    pub(crate) fn new_enabled(enabled: bool) -> Self {
+        Self {
+            time: if enabled { Some(SmallVec::new()) } else { None },
         }
+    }
 
-        // Zero extend clock to accommodate `task_id` tasks.
-        pub(crate) fn extend(&mut self, task_id: TaskId) {
-            let num_new_tasks = 1 + task_id.0 - self.time.len();
+    // Zero extend clock to accommodate `task_id` tasks.
+    pub(crate) fn extend(&mut self, task_id: TaskId) {
+        if let Some(ref mut time) = self.time {
+            let num_new_tasks = 1 + task_id.0 - time.len();
             let clock: SmallVec<[_; DEFAULT_INLINE_TASKS]> = smallvec![0u32; num_new_tasks];
-            self.time.extend_from_slice(&clock);
+            time.extend_from_slice(&clock);
         }
+    }
 
-        pub(crate) fn increment(&mut self, task_id: TaskId) {
-            self.time[task_id.0] += 1;
+    pub(crate) fn increment(&mut self, task_id: TaskId) {
+        if let Some(ref mut time) = self.time {
+            time[task_id.0] += 1;
         }
+    }
 
-        // Update the clock of `self` with the clock from `other`
-        pub(crate) fn update(&mut self, other: &Self) {
-            let n1 = self.time.len();
-            let n2 = other.time.len();
+    // Update the clock of `self` with the clock from `other`
+    pub(crate) fn update(&mut self, other: &Self) {
+        if let (Some(ref mut self_time), Some(ref other_time)) = (&mut self.time, &other.time) {
+            let n1 = self_time.len();
+            let n2 = other_time.len();
             for i in 0..n1.min(n2) {
-                self.time[i] = self.time[i].max(other.time[i])
+                self_time[i] = self_time[i].max(other_time[i])
             }
             for i in n1..n2 {
-                // could be empty
-                self.time.push(other.time[i]);
-            }
-        }
-
-        pub fn get(&self, i: usize) -> u32 {
-            self.time[i]
-        }
-    }
-
-    impl<const N: usize> From<&[u32; N]> for VectorClock {
-        fn from(v: &[u32; N]) -> Self {
-            Self {
-                time: SmallVec::from(&v[..]),
+                self_time.push(other_time[i]);
             }
         }
     }
 
-    impl From<&[u32]> for VectorClock {
-        fn from(v: &[u32]) -> Self {
-            Self {
-                time: SmallVec::from(v),
-            }
-        }
+    pub fn get(&self, i: usize) -> u32 {
+        self.time.as_ref().map(|time| time[i]).unwrap_or(0)
     }
+}
 
-    impl std::ops::Deref for VectorClock {
-        type Target = [u32];
-        fn deref(&self) -> &Self::Target {
-            &self.time[..]
-        }
-    }
-
-    fn unify(a: Ordering, b: Ordering) -> Option<Ordering> {
-        use Ordering::*;
-
-        match (a, b) {
-            (Equal, Equal) => Some(Equal),
-            (Less, Greater) | (Greater, Less) => None,
-            (Less, _) | (_, Less) => Some(Less),
-            (Greater, _) | (_, Greater) => Some(Greater),
-        }
-    }
-
-    impl PartialOrd for VectorClock {
-        // Compare vector clocks
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            let n1 = self.time.len();
-            let n2 = other.time.len();
-            // if (n1<n2), then other can't have happened before self, similarly for (n1>n2)
-            let mut ord = n1.cmp(&n2);
-            for i in 0..n1.min(n2) {
-                ord = unify(ord, self.time[i].cmp(&other.time[i]))?; // return if incomparable
-            }
-            Some(ord)
+impl<const N: usize> From<&[u32; N]> for VectorClock {
+    fn from(v: &[u32; N]) -> Self {
+        Self {
+            time: Some(SmallVec::from(&v[..])),
         }
     }
 }
 
-/// A dummy VectorClock implementation which only provides no-op stubs to improve testing throughput when
-/// vector clocks are not necessary
-#[cfg(any(not(any(test, feature = "vector-clocks")), feature = "bench-no-vector-clocks"))]
-mod vector_clock {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct VectorClock;
-
-    impl VectorClock {
-        pub(crate) const fn new() -> Self {
-            Self
-        }
-
-        pub(crate) fn extend(&mut self, _task_id: TaskId) {
-            // No-op when vector clocks are disabled
-        }
-
-        pub(crate) fn increment(&mut self, _task_id: TaskId) {
-            // No-op when vector clocks are disabled
-        }
-
-        pub(crate) fn update(&mut self, _other: &Self) {
-            // No-op when vector clocks are disabled
-        }
-
-        pub fn get(&self, _i: usize) -> u32 {
-            0
-        }
-    }
-
-    impl<const N: usize> From<&[u32; N]> for VectorClock {
-        fn from(_v: &[u32; N]) -> Self {
-            Self
-        }
-    }
-
-    impl From<&[u32]> for VectorClock {
-        fn from(_v: &[u32]) -> Self {
-            Self
-        }
-    }
-
-    impl std::ops::Deref for VectorClock {
-        type Target = [u32];
-        fn deref(&self) -> &Self::Target {
-            &[]
-        }
-    }
-
-    impl PartialOrd for VectorClock {
-        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
-            Some(Ordering::Equal)
+impl From<&[u32]> for VectorClock {
+    fn from(v: &[u32]) -> Self {
+        Self {
+            time: Some(SmallVec::from(v)),
         }
     }
 }
 
-pub use vector_clock::VectorClock;
+impl std::ops::Deref for VectorClock {
+    type Target = [u32];
+    fn deref(&self) -> &Self::Target {
+        self.time.as_ref().map(|time| &time[..]).unwrap_or(&[])
+    }
+}
+
+fn unify(a: Ordering, b: Ordering) -> Option<Ordering> {
+    use Ordering::*;
+
+    match (a, b) {
+        (Equal, Equal) => Some(Equal),
+        (Less, Greater) | (Greater, Less) => None,
+        (Less, _) | (_, Less) => Some(Less),
+        (Greater, _) | (_, Greater) => Some(Greater),
+    }
+}
+
+impl PartialOrd for VectorClock {
+    // Compare vector clocks
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (&self.time, &other.time) {
+            (Some(self_time), Some(other_time)) => {
+                let n1 = self_time.len();
+                let n2 = other_time.len();
+                let mut ord = n1.cmp(&n2);
+                for i in 0..n1.min(n2) {
+                    ord = unify(ord, self_time[i].cmp(&other_time[i]))?;
+                }
+                Some(ord)
+            }
+            _ => Some(Ordering::Equal),
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {

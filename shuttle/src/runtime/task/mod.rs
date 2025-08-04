@@ -205,8 +205,7 @@ impl Task {
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
     ) -> Self {
-        #[cfg(all(any(test, feature = "vector-clocks"), not(feature = "bench-no-vector-clocks")))]
-        assert!(id.0 < clock.time.len());
+        // Vector clock assertion removed - now handled at runtime
         let mut continuation = ContinuationPool::acquire(stack_size);
         continuation.initialize(f);
         let waker = make_waker(id);

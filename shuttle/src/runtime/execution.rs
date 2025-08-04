@@ -83,7 +83,7 @@ impl Execution {
                 Box::new(move || thread_fn(f, Default::default())),
                 config.stack_size,
                 Some("main-thread".to_string()),
-                Some(VectorClock::new()),
+                Some(VectorClock::new_enabled(config.vector_clocks)),
             );
 
             // Run the test to completion
@@ -339,6 +339,11 @@ impl ExecutionState {
     /// A shortcut to get the current task ID
     pub(crate) fn me() -> TaskId {
         Self::with(|s| s.current().id())
+    }
+
+    /// A shortcut to get the current task ID
+    pub(crate) fn use_vector_clocks() -> bool {
+        Self::with(|s| s.config.vector_clocks)
     }
 
     fn set_labels_for_new_task(state: &ExecutionState, task_id: TaskId, name: Option<String>) {
