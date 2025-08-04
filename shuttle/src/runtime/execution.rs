@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::panic;
+use std::panic::{self, Location};
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{trace, Span};
@@ -68,6 +68,7 @@ impl Execution {
     /// Run a function to be tested, taking control of scheduling it and any tasks it might spawn.
     /// This function runs until `f` and all tasks spawned by `f` have terminated, or until the
     /// scheduler returns `None`, indicating the execution should not be explored any further.
+    #[track_caller]
     pub(crate) fn run<F>(mut self, config: &Config, f: F)
     where
         F: FnOnce() + Send + 'static,
@@ -80,6 +81,7 @@ impl Execution {
 
         let _guard = init_panic_hook(config.clone());
 
+        let caller = Location::caller();
         EXECUTION_STATE.set(&state, move || {
             // Spawn `f` as the first task
             ExecutionState::spawn_thread(
@@ -87,6 +89,7 @@ impl Execution {
                 config.stack_size,
                 Some("main-thread".to_string()),
                 Some(VectorClock::new()),
+                caller,
             );
 
             // Run the test to completion
@@ -293,7 +296,7 @@ impl ScheduledTask {
 }
 
 #[inline]
-fn get_signature(state: &ExecutionState, code_identifier: impl Hash) -> u64 {
+fn get_signature(state: &ExecutionState, code_identifier: impl Hash, caller: &'static Location<'static>) -> u64 {
     // use rapidhash::fast::RapidHasher;
     // let mut hasher = RapidHasher::default();
     use std::hash::DefaultHasher;
@@ -310,8 +313,7 @@ fn get_signature(state: &ExecutionState, code_identifier: impl Hash) -> u64 {
             0
         };
     } else {
-        let caller = std::panic::Location::caller();
-        let parent = state.current().signature;
+        let parent = state.try_current().map(|t| t.signature).unwrap_or(0);
         code_identifier.hash(&mut hasher);
         parent.hash(&mut hasher);
         caller.hash(&mut hasher);
@@ -405,8 +407,12 @@ impl ExecutionState {
 
     /// Spawn a new task for a future. This doesn't create a yield point; the caller should do that
     /// if it wants to give the new task a chance to run immediately.
-    #[track_caller]
-    pub(crate) fn spawn_future<F>(future: F, stack_size: usize, name: Option<String>) -> TaskId
+    pub(crate) fn spawn_future<F>(
+        future: F,
+        stack_size: usize,
+        name: Option<String>,
+        caller: &'static Location<'static>,
+    ) -> TaskId
     where
         F: Future<Output = ()> + 'static,
     {
@@ -418,7 +424,7 @@ impl ExecutionState {
             let tag = state.get_tag_or_default_for_current_task();
 
             let code_id = TypeId::of::<F>();
-            let signature = get_signature(state, code_id);
+            let signature = get_signature(state, code_id, caller);
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
@@ -446,12 +452,12 @@ impl ExecutionState {
         task_id
     }
 
-    #[track_caller]
     pub(crate) fn spawn_thread(
         f: Box<dyn FnOnce() + 'static>,
         stack_size: usize,
         name: Option<String>,
         mut initial_clock: Option<VectorClock>,
+        caller: &'static Location<'static>,
     ) -> TaskId {
         let task_id = Self::with(|state| {
             let parent_span_id = state.top_level_span.id();
@@ -459,7 +465,7 @@ impl ExecutionState {
             let tag = state.get_tag_or_default_for_current_task();
 
             let address = addr_of!(*f) as *const () as usize;
-            let signature = get_signature(state, address);
+            let signature = get_signature(state, address, caller);
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
