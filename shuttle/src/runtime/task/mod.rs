@@ -188,6 +188,12 @@ pub struct Task {
     // Arbitrarily settable tag which is inherited from the parent.
     #[allow(deprecated)]
     tag: Option<Arc<dyn Tag>>,
+
+    #[allow(unused)]
+    /// The signature of a Task; this is an identifier that is *not* guaranteed to be unique. Tasks with different signatures will
+    /// have *different* behavior. Tasks with the same signature are likely to exhibit similar behavior, but are *not guaranteed*
+    /// to be the same.
+    pub signature: u64,
 }
 
 #[allow(deprecated)]
@@ -204,6 +210,7 @@ impl Task {
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
+        signature: u64,
     ) -> Self {
         #[cfg(any(test, feature = "vector-clocks"))]
         assert!(id.0 < clock.time.len());
@@ -233,6 +240,7 @@ impl Task {
             span_stack,
             local_storage: StorageMap::new(),
             tag: None,
+            signature,
         };
 
         if let Some(tag) = tag {
@@ -256,6 +264,7 @@ impl Task {
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
+        signature: u64,
     ) -> Self {
         Self::new(
             f,
@@ -267,6 +276,7 @@ impl Task {
             schedule_len,
             tag,
             parent_task_id,
+            signature,
         )
     }
 
@@ -281,6 +291,7 @@ impl Task {
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
+        signature: u64,
     ) -> Self
     where
         F: Future<Output = ()> + 'static,
@@ -304,6 +315,7 @@ impl Task {
             schedule_len,
             tag,
             parent_task_id,
+            signature,
         )
     }
 

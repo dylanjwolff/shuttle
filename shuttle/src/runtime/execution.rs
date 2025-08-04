@@ -311,7 +311,7 @@ fn get_signature(state: &ExecutionState, code_identifier: impl Hash) -> u64 {
         };
     } else {
         let caller = std::panic::Location::caller();
-        let parent = state.current_task.id();
+        let parent = state.current().signature;
         code_identifier.hash(&mut hasher);
         parent.hash(&mut hasher);
         caller.hash(&mut hasher);
@@ -417,8 +417,8 @@ impl ExecutionState {
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
 
-            let code_id= TypeId::of::<F>();
-            let _signature = get_signature(state, code_id);
+            let code_id = TypeId::of::<F>();
+            let signature = get_signature(state, code_id);
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
@@ -435,6 +435,7 @@ impl ExecutionState {
                 schedule_len,
                 tag,
                 state.try_current().map(|t| t.id()),
+                signature,
             );
 
             state.tasks.push(task);
@@ -458,7 +459,7 @@ impl ExecutionState {
             let tag = state.get_tag_or_default_for_current_task();
 
             let address = addr_of!(*f) as *const () as usize;
-            let _signature = get_signature(state, address);
+            let signature = get_signature(state, address);
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
@@ -483,6 +484,7 @@ impl ExecutionState {
                 schedule_len,
                 tag,
                 state.try_current().map(|t| t.id()),
+                signature,
             );
             state.tasks.push(task);
 
