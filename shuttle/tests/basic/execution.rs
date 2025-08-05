@@ -387,6 +387,34 @@ mod task_signature_test {
             test_name, expected_count, worker_signatures[0]
         );
     }
+
+    pub fn verify_different_signatures(signatures: &Arc<Mutex<Vec<u64>>>, expected_count: usize, test_name: &str) {
+        let collected_signatures = signatures.lock().unwrap();
+        println!(
+            "{}: Total signatures captured: {}",
+            test_name,
+            collected_signatures.len()
+        );
+
+        let mut signature_counts = std::collections::HashMap::new();
+        for &sig in collected_signatures.iter() {
+            *signature_counts.entry(sig).or_insert(0) += 1;
+        }
+
+        println!("{}: Signature counts: {:?}", test_name, signature_counts);
+
+        let unique_signatures: Vec<u64> = signature_counts.keys().cloned().collect();
+        assert_eq!(
+            unique_signatures.len(),
+            expected_count,
+            "Should have {} different signatures",
+            expected_count
+        );
+        println!(
+            "{}: All {} tasks have different signatures: {:?}",
+            test_name, expected_count, unique_signatures
+        );
+    }
 }
 
 #[test]
@@ -448,4 +476,55 @@ fn task_signatures_same_function_async() {
     });
 
     verify_same_signatures(&signatures_clone, 10, "async test");
+}
+
+#[test]
+fn task_signatures_different_functions() {
+    use task_signature_test::{verify_different_signatures, SignatureSubscriber};
+
+    let subscriber = SignatureSubscriber::new();
+    let signatures_clone = Arc::clone(&subscriber.signatures);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    fn worker_function_1() {}
+    fn worker_function_2() {}
+
+    let scheduler = RandomScheduler::new(1);
+    let runner = Runner::new(scheduler, Default::default());
+    runner.run(move || {
+        let handle1 = thread::spawn(worker_function_1);
+        let handle2 = thread::spawn(worker_function_2);
+
+        handle1.join().unwrap();
+        handle2.join().unwrap();
+    });
+
+    verify_different_signatures(&signatures_clone, 3, "sync different functions test");
+}
+
+#[test]
+fn task_signatures_different_functions_async() {
+    use shuttle::future;
+    use task_signature_test::{verify_different_signatures, SignatureSubscriber};
+
+    let subscriber = SignatureSubscriber::new();
+    let signatures_clone = Arc::clone(&subscriber.signatures);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    async fn async_worker_function_1() {}
+    async fn async_worker_function_2() {}
+
+    let scheduler = RandomScheduler::new(1);
+    let runner = Runner::new(scheduler, Default::default());
+    runner.run(move || {
+        let handle1 = future::spawn(async_worker_function_1());
+        let handle2 = future::spawn(async_worker_function_2());
+
+        future::block_on(async {
+            handle1.await.unwrap();
+            handle2.await.unwrap();
+        });
+    });
+
+    verify_different_signatures(&signatures_clone, 3, "async different functions test");
 }
