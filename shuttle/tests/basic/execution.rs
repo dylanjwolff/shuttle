@@ -287,3 +287,165 @@ fn do_reset_step_count() {
 fn do_reset_step_count_panics() {
     reset_step_count(true, 6);
 }
+
+// Common test infrastructure for task signature tests
+mod task_signature_test {
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Id, Metadata, Subscriber};
+
+    #[derive(Clone)]
+    pub struct SignatureSubscriber {
+        pub signatures: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl SignatureSubscriber {
+        pub fn new() -> Self {
+            Self {
+                signatures: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl Subscriber for SignatureSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let metadata = event.metadata();
+            if metadata.target() == "shuttle::runtime::task" && metadata.level() == &tracing::Level::INFO {
+                struct SignatureVisitor {
+                    task_id: Option<String>,
+                    signature: Option<u64>,
+                }
+                impl Visit for SignatureVisitor {
+                    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                        if field.name() == "task_id" {
+                            self.task_id = Some(format!("{:?}", value));
+                        }
+                    }
+                    fn record_u64(&mut self, field: &Field, value: u64) {
+                        if field.name() == "signature" {
+                            self.signature = Some(value);
+                        }
+                    }
+                }
+                let mut visitor = SignatureVisitor {
+                    task_id: None,
+                    signature: None,
+                };
+                event.record(&mut visitor);
+
+                if let Some(sig) = visitor.signature {
+                    self.signatures.lock().unwrap().push(sig);
+                }
+            }
+        }
+
+        fn enter(&self, _span: &Id) {}
+        fn exit(&self, _span: &Id) {}
+    }
+
+    pub fn verify_same_signatures(signatures: &Arc<Mutex<Vec<u64>>>, expected_count: usize, test_name: &str) {
+        let collected_signatures = signatures.lock().unwrap();
+        println!(
+            "{}: Total signatures captured: {}",
+            test_name,
+            collected_signatures.len()
+        );
+
+        let mut signature_counts = std::collections::HashMap::new();
+        for &sig in collected_signatures.iter() {
+            *signature_counts.entry(sig).or_insert(0) += 1;
+        }
+
+        println!("{}: Signature counts: {:?}", test_name, signature_counts);
+
+        let worker_signatures: Vec<u64> = signature_counts
+            .iter()
+            .filter(|(_, &count)| count == expected_count)
+            .map(|(&sig, _)| sig)
+            .collect();
+
+        assert_eq!(
+            worker_signatures.len(),
+            1,
+            "Should have exactly one signature appearing {} times",
+            expected_count
+        );
+        println!(
+            "{}: All {} tasks have the same signature: {}",
+            test_name, expected_count, worker_signatures[0]
+        );
+    }
+}
+
+#[test]
+fn task_signatures_same_function() {
+    use task_signature_test::{verify_same_signatures, SignatureSubscriber};
+
+    let subscriber = SignatureSubscriber::new();
+    let signatures_clone = Arc::clone(&subscriber.signatures);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    fn worker_function() {
+        // Simple worker function
+    }
+
+    let scheduler = RandomScheduler::new(1);
+    let runner = Runner::new(scheduler, Default::default());
+    runner.run(move || {
+        let mut handles = Vec::new();
+
+        for _ in 0..10 {
+            handles.push(thread::spawn(worker_function));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
+
+    verify_same_signatures(&signatures_clone, 10, "sync test");
+}
+
+#[test]
+fn task_signatures_same_function_async() {
+    use shuttle::future;
+    use task_signature_test::{verify_same_signatures, SignatureSubscriber};
+
+    let subscriber = SignatureSubscriber::new();
+    let signatures_clone = Arc::clone(&subscriber.signatures);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    async fn async_worker_function() {
+        // Simple async worker function
+    }
+
+    let scheduler = RandomScheduler::new(1);
+    let runner = Runner::new(scheduler, Default::default());
+    runner.run(move || {
+        let mut handles = Vec::new();
+
+        for _ in 0..10 {
+            handles.push(future::spawn(async_worker_function()));
+        }
+
+        future::block_on(async {
+            for handle in handles {
+                handle.await.unwrap();
+            }
+        });
+    });
+
+    verify_same_signatures(&signatures_clone, 10, "async test");
+}

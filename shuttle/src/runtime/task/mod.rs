@@ -248,7 +248,7 @@ impl Task {
         }
 
         error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len)
-            .in_scope(|| event!(Level::INFO, "created task: {:?}", task.id));
+            .in_scope(|| event!(Level::INFO, task_id = ?task.id, signature = signature, "created task"));
 
         task
     }

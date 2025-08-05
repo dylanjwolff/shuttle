@@ -7,7 +7,6 @@ use crate::runtime::thread::continuation::PooledContinuation;
 use crate::scheduler::{Schedule, Scheduler};
 use crate::thread::thread_fn;
 use crate::{Config, MaxSteps};
-use std::ptr::addr_of;
 
 use scoped_tls::scoped_thread_local;
 use smallvec::SmallVec;
@@ -296,7 +295,11 @@ impl ScheduledTask {
 }
 
 #[inline]
-fn get_signature(state: &ExecutionState, code_identifier: impl Hash, caller: &'static Location<'static>) -> u64 {
+fn get_signature(
+    state: &ExecutionState,
+    code_identifier: impl Hash + Debug,
+    caller: &'static Location<'static>,
+) -> u64 {
     // use rapidhash::fast::RapidHasher;
     // let mut hasher = RapidHasher::default();
     use std::hash::DefaultHasher;
@@ -317,7 +320,12 @@ fn get_signature(state: &ExecutionState, code_identifier: impl Hash, caller: &'s
         code_identifier.hash(&mut hasher);
         parent.hash(&mut hasher);
         caller.hash(&mut hasher);
-        return hasher.finish();
+        let hash = hasher.finish();
+        println!(
+            "caller {} x parent {} x code_id {:?} = {}",
+            caller, parent, code_identifier, hash
+        );
+        return hash;
     }
 }
 
@@ -464,8 +472,7 @@ impl ExecutionState {
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
 
-            let address = addr_of!(*f) as *const () as usize;
-            let signature = get_signature(state, address, caller);
+            let signature = get_signature(state, 0, caller);
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
