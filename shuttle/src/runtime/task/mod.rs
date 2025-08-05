@@ -11,6 +11,9 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::future::Future;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::panic::Location;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Waker};
@@ -146,6 +149,37 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TaskSignature {
+    #[allow(unused)]
+    spawn_call_site: &'static Location<'static>,
+    #[allow(unused)]
+    parent_signature_hash: u64,
+    hash: u64,
+}
+
+impl TaskSignature {
+    pub(crate) fn new(
+        state: &ExecutionState,
+        spawn_call_site: &'static Location<'static>,
+        hasher: &mut impl Hasher,
+    ) -> TaskSignature {
+        let parent_signature_hash = state.try_current().map(|t| t.signature.hash).unwrap_or(0);
+        parent_signature_hash.hash(hasher);
+        spawn_call_site.hash(hasher);
+        let hash = hasher.finish();
+        println!(
+            "caller {} x parent {} = {}",
+            spawn_call_site, parent_signature_hash, hash
+        );
+        return Self {
+            spawn_call_site,
+            parent_signature_hash,
+            hash,
+        };
+    }
+}
+
 /// A `Task` represents a user-level unit of concurrency. Each task has an `id` that is unique within
 /// the execution, and a `state` reflecting whether the task is runnable (enabled) or not.
 #[derive(Debug)]
@@ -189,11 +223,10 @@ pub struct Task {
     #[allow(deprecated)]
     tag: Option<Arc<dyn Tag>>,
 
-    #[allow(unused)]
     /// The signature of a Task; this is an identifier that is *not* guaranteed to be unique. Tasks with different signatures will
     /// have *different* behavior. Tasks with the same signature are likely to exhibit similar behavior, but are *not guaranteed*
     /// to be the same.
-    pub signature: u64,
+    pub signature: TaskSignature,
 }
 
 #[allow(deprecated)]
@@ -210,7 +243,7 @@ impl Task {
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
-        signature: u64,
+        signature: TaskSignature,
     ) -> Self {
         #[cfg(any(test, feature = "vector-clocks"))]
         assert!(id.0 < clock.time.len());
@@ -248,7 +281,7 @@ impl Task {
         }
 
         error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len)
-            .in_scope(|| event!(Level::INFO, task_id = ?task.id, signature = signature, "created task"));
+            .in_scope(|| event!(Level::INFO, task_id = ?task.id, signature = task.signature.hash, "created task"));
 
         task
     }
@@ -264,7 +297,7 @@ impl Task {
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
-        signature: u64,
+        signature: TaskSignature,
     ) -> Self {
         Self::new(
             f,
@@ -291,7 +324,7 @@ impl Task {
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
-        signature: u64,
+        signature: TaskSignature,
     ) -> Self
     where
         F: Future<Output = ()> + 'static,

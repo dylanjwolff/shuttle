@@ -2,7 +2,7 @@ use crate::runtime::failure::{init_panic_hook, persist_failure, persist_task_fai
 use crate::runtime::storage::{StorageKey, StorageMap};
 use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::labels::Labels;
-use crate::runtime::task::{ChildLabelFn, Task, TaskId, TaskName, DEFAULT_INLINE_TASKS};
+use crate::runtime::task::{ChildLabelFn, Task, TaskId, TaskName, TaskSignature, DEFAULT_INLINE_TASKS};
 use crate::runtime::thread::continuation::PooledContinuation;
 use crate::scheduler::{Schedule, Scheduler};
 use crate::thread::thread_fn;
@@ -10,12 +10,12 @@ use crate::{Config, MaxSteps};
 
 use scoped_tls::scoped_thread_local;
 use smallvec::SmallVec;
-use std::any::{Any, TypeId};
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
+use std::hash::DefaultHasher;
 use std::panic::{self, Location};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -294,41 +294,6 @@ impl ScheduledTask {
     }
 }
 
-#[inline]
-fn get_signature(
-    state: &ExecutionState,
-    code_identifier: impl Hash + Debug,
-    caller: &'static Location<'static>,
-) -> u64 {
-    // use rapidhash::fast::RapidHasher;
-    // let mut hasher = RapidHasher::default();
-    use std::hash::DefaultHasher;
-    let mut hasher = DefaultHasher::new();
-
-    const FULL_CALLSTACK: bool = false;
-    if FULL_CALLSTACK {
-        use std::backtrace::{Backtrace, BacktraceStatus};
-        let bt = Backtrace::force_capture();
-        return if bt.status() == BacktraceStatus::Captured {
-            bt.to_string().hash(&mut hasher);
-            hasher.finish()
-        } else {
-            0
-        };
-    } else {
-        let parent = state.try_current().map(|t| t.signature).unwrap_or(0);
-        code_identifier.hash(&mut hasher);
-        parent.hash(&mut hasher);
-        caller.hash(&mut hasher);
-        let hash = hasher.finish();
-        println!(
-            "caller {} x parent {} x code_id {:?} = {}",
-            caller, parent, code_identifier, hash
-        );
-        return hash;
-    }
-}
-
 impl ExecutionState {
     fn new(config: Config, scheduler: Rc<RefCell<dyn Scheduler>>, initial_schedule: Schedule) -> Self {
         Self {
@@ -431,8 +396,7 @@ impl ExecutionState {
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
 
-            let code_id = TypeId::of::<F>();
-            let signature = get_signature(state, code_id, caller);
+            let signature = TaskSignature::new(state, caller, &mut DefaultHasher::new());
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
@@ -472,7 +436,7 @@ impl ExecutionState {
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
 
-            let signature = get_signature(state, 0, caller);
+            let signature = TaskSignature::new(state, caller, &mut DefaultHasher::new());
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
