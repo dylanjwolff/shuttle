@@ -82,7 +82,7 @@ impl Execution {
         EXECUTION_STATE.set(&state, move || {
             let future = Box::pin(async move { f() });
             // Spawn `f` as the first task
-            ExecutionState::spawn_future(future, Some("main-thread".to_string()));
+            ExecutionState::spawn_future(future, Some("main-thread".to_string()), Some(VectorClock::new()));
 
             // Run the test to completion
             while self.step(config) {}
@@ -380,7 +380,7 @@ impl ExecutionState {
 
     /// Spawn a new task for a future. This doesn't create a yield point; the caller should do that
     /// if it wants to give the new task a chance to run immediately.
-    pub(crate) fn spawn_future<F>(future: F, name: Option<String>) -> TaskId
+    pub(crate) fn spawn_future<F>(future: F, name: Option<String>, mut initial_clock : Option<VectorClock>) -> TaskId
     where
         F: Future<Output = ()> + 'static,
     {
@@ -393,8 +393,14 @@ impl ExecutionState {
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
-            let clock = state.increment_clock_mut(); // Increment the parent's clock
+            let clock = if let Some(ref mut clock) = initial_clock {
+                clock
+            } else {
+                // Inherit the clock of the parent thread (which spawned this task)
+                state.increment_clock_mut()
+            };
             clock.extend(task_id); // and extend it with an entry for the new task
+            let clock = clock.clone();
 
             let task = Task::from_future(
                 future,

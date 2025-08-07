@@ -25,7 +25,7 @@ where
     F::Output: 'static,
 {
     let inner = Arc::new(std::sync::Mutex::new(JoinHandleInner::default()));
-    let task_id = ExecutionState::spawn_future(Wrapper::new(fut, inner.clone()), None);
+    let task_id = ExecutionState::spawn_future(Wrapper::new(fut, inner.clone()), None, None);
 
     thread::switch();
 
