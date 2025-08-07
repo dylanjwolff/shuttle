@@ -155,7 +155,7 @@ pub struct TaskSignature {
     spawn_call_site: &'static Location<'static>,
     #[allow(unused)]
     parent_signature_hash: u64,
-    hash: u64,
+    signature_hash: u64,
 }
 
 impl TaskSignature {
@@ -164,19 +164,23 @@ impl TaskSignature {
         spawn_call_site: &'static Location<'static>,
         hasher: &mut impl Hasher,
     ) -> TaskSignature {
-        let parent_signature_hash = state.try_current().map(|t| t.signature.hash).unwrap_or(0);
-        parent_signature_hash.hash(hasher);
-        spawn_call_site.hash(hasher);
-        let hash = hasher.finish();
-        println!(
-            "caller {} x parent {} = {}",
-            spawn_call_site, parent_signature_hash, hash
-        );
-        return Self {
+        let parent_signature_hash = state.try_current().map(|t| t.signature.signature_hash).unwrap_or(0);
+
+        let mut ts = Self {
             spawn_call_site,
             parent_signature_hash,
-            hash,
+            signature_hash: 0,
         };
+        ts.hash(hasher);
+        ts.signature_hash = hasher.finish();
+        return ts;
+    }
+}
+
+impl Hash for TaskSignature {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.parent_signature_hash.hash(state);
+        self.spawn_call_site.hash(state);
     }
 }
 
@@ -281,7 +285,7 @@ impl Task {
         }
 
         error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len)
-            .in_scope(|| event!(Level::INFO, task_id = ?task.id, signature = task.signature.hash, "created task"));
+            .in_scope(|| event!(Level::INFO, task_id = ?task.id, signature = task.signature.signature_hash, "created task"));
 
         task
     }

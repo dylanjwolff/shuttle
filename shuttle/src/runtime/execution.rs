@@ -716,14 +716,13 @@ impl ExecutionState {
             return Ok(());
         }
 
-
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
 
         // Cast the slice of raw pointers to a slice of references in place to provide schedulers with a safe API
         //
         // SAFETY: This is safe because the tasks themselves are only being accessed through this shared reference by the
         // schedulers, and all references are always cleared from the runnable_tasks Vec at the end of this function.
-        // The transmute itself is safe because *const and & have the same layout, and the pointer is created from a 
+        // The transmute itself is safe because *const and & have the same layout, and the pointer is created from a
         // reference earlier in this function.
         let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks) };
 
