@@ -13,7 +13,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Waker};
+use std::task::{Context, Poll, Waker};
 use tracing::{error_span, event, field, Level, Span};
 
 pub(crate) mod clock;
@@ -154,6 +154,14 @@ pub(crate) struct DynFuture {
 impl Debug for DynFuture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "DynFuture")
+    }
+}
+
+impl Future for DynFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.get_mut().inner.as_mut().poll(cx)
     }
 }
 

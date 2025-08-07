@@ -12,8 +12,9 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::panic;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::Context;
@@ -174,13 +175,11 @@ impl Execution {
                     });
                 });
 
-                // Dylan you have to update this to be a poll of the future.
-                // This has to become the async executor doing a single poll !!!!!!!!!
-                let mut future = Box::pin(continuation.borrow_mut().inner);
+                let mut future = continuation.borrow_mut();
                 let waker = ExecutionState::with(|state| state.current_mut().waker());
                 let cx = &mut Context::from_waker(&waker);
 
-                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| match future.as_mut().poll(cx) {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| match Pin::new(&mut *future).poll(cx) {
                     Poll::Ready(result) => true,
                     Poll::Pending => {
                         ExecutionState::with(|state| state.current_mut().sleep_unless_woken());
