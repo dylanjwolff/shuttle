@@ -258,8 +258,7 @@ unsafe impl Send for PooledContinuation {}
 pub(crate) fn switch() {
     crate::annotations::record_tick();
     if ExecutionState::maybe_yield() {
-        let r = generator::yield_(ContinuationOutput::Yielded).unwrap();
-        assert!(matches!(r, ContinuationInput::Resume));
+        crate::future::block_on(crate::future::yield_now());
     }
 }
 
