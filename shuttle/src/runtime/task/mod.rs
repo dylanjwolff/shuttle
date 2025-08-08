@@ -11,8 +11,8 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::future::Future;
-use std::hash::Hash;
 use std::hash::Hasher;
+use std::hash::{DefaultHasher, Hash};
 use std::panic::Location;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -150,7 +150,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct TaskSignature {
+pub(crate) struct TaskSignature {
     #[allow(unused)]
     spawn_call_site: &'static Location<'static>,
     #[allow(unused)]
@@ -159,16 +159,35 @@ pub struct TaskSignature {
 }
 
 impl TaskSignature {
-    pub(crate) fn new(
-        state: &ExecutionState,
+    pub(crate) fn new(state: &mut ExecutionState, spawn_call_site: &'static Location<'static>) -> TaskSignature {
+        let mut hasher = DefaultHasher::new();
+        if let Some(t) = state.try_current_mut() {
+            t.signature.new_child(spawn_call_site, &mut hasher)
+        } else {
+            // If we can't find the current task, then the new child is parentless
+            TaskSignature::new_parentless(spawn_call_site, &mut hasher)
+        }
+    }
+
+    fn new_parentless(spawn_call_site: &'static Location<'static>, hasher: &mut impl Hasher) -> TaskSignature {
+        let mut ts = Self {
+            spawn_call_site,
+            parent_signature_hash: 0,
+            signature_hash: 0,
+        };
+        ts.hash(hasher);
+        ts.signature_hash = hasher.finish();
+        return ts;
+    }
+
+    fn new_child(
+        self: &mut TaskSignature,
         spawn_call_site: &'static Location<'static>,
         hasher: &mut impl Hasher,
     ) -> TaskSignature {
-        let parent_signature_hash = state.try_current().map(|t| t.signature.signature_hash).unwrap_or(0);
-
         let mut ts = Self {
             spawn_call_site,
-            parent_signature_hash,
+            parent_signature_hash: self.signature_hash,
             signature_hash: 0,
         };
         ts.hash(hasher);
@@ -230,7 +249,7 @@ pub struct Task {
     /// The signature of a Task; this is an identifier that is *not* guaranteed to be unique. Tasks with different signatures will
     /// have *different* behavior. Tasks with the same signature are likely to exhibit similar behavior, but are *not guaranteed*
     /// to be the same.
-    pub signature: TaskSignature,
+    pub(crate) signature: TaskSignature,
 }
 
 #[allow(deprecated)]
@@ -284,8 +303,9 @@ impl Task {
             task.set_tag(tag);
         }
 
-        error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len)
-            .in_scope(|| event!(Level::INFO, task_id = ?task.id, signature = task.signature.signature_hash, "created task"));
+        error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len).in_scope(
+            || event!(Level::INFO, task_id = ?task.id, signature = task.signature.signature_hash, "created task"),
+        );
 
         task
     }

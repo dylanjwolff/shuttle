@@ -15,7 +15,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::hash::DefaultHasher;
 use std::panic::{self, Location};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -396,8 +395,6 @@ impl ExecutionState {
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
 
-            let signature = TaskSignature::new(state, caller, &mut DefaultHasher::new());
-
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
             let clock = state.increment_clock_mut(); // Increment the parent's clock
@@ -413,7 +410,7 @@ impl ExecutionState {
                 schedule_len,
                 tag,
                 state.try_current().map(|t| t.id()),
-                signature,
+                TaskSignature::new(state, caller),
             );
 
             state.tasks.push(task);
@@ -435,8 +432,6 @@ impl ExecutionState {
             let parent_span_id = state.top_level_span.id();
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
-
-            let signature = TaskSignature::new(state, caller, &mut DefaultHasher::new());
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
@@ -461,7 +456,7 @@ impl ExecutionState {
                 schedule_len,
                 tag,
                 state.try_current().map(|t| t.id()),
-                signature,
+                TaskSignature::new(state, caller),
             );
             state.tasks.push(task);
 
@@ -594,6 +589,10 @@ impl ExecutionState {
         self.try_get(self.current_task.id()?)
     }
 
+    pub(crate) fn try_current_mut(&mut self) -> Option<&mut Task> {
+        self.try_get_mut(self.current_task.id()?)
+    }
+
     pub(crate) fn get(&self, id: TaskId) -> &Task {
         self.try_get(id).unwrap()
     }
@@ -604,6 +603,10 @@ impl ExecutionState {
 
     pub(crate) fn try_get(&self, id: TaskId) -> Option<&Task> {
         self.tasks.get(id.0)
+    }
+
+    pub(crate) fn try_get_mut(&mut self, id: TaskId) -> Option<&mut Task> {
+        self.tasks.get_mut(id.0)
     }
 
     pub(crate) fn in_cleanup(&self) -> bool {
