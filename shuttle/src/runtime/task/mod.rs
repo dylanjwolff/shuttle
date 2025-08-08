@@ -153,6 +153,7 @@ where
 #[derive(Debug, Clone)]
 pub(crate) struct TaskSignature {
     spawn_call_site: &'static Location<'static>,
+    spawn_call_site_hash: u64,
     parent_signature_hash: u64,
     counter: u32,
     signature_hash: u64,
@@ -172,15 +173,16 @@ impl TaskSignature {
     }
 
     fn new_parentless(spawn_call_site: &'static Location<'static>, hasher: &mut impl Hasher) -> TaskSignature {
-        let mut ts = Self {
+        spawn_call_site.hash(hasher);
+        let h = hasher.finish();
+        let ts = Self {
             spawn_call_site,
+            spawn_call_site_hash: h,
             parent_signature_hash: 0,
-            signature_hash: 0,
+            signature_hash: h,
             counter: 0,
             child_counters: HashMap::new(),
         };
-        spawn_call_site.hash(hasher);
-        ts.signature_hash = hasher.finish();
         return ts;
     }
 
@@ -191,9 +193,11 @@ impl TaskSignature {
     ) -> TaskSignature {
         let counter = self.child_counters.entry(spawn_call_site).or_insert(0);
         *counter += 1;
+        spawn_call_site.hash(hasher);
 
         let mut ts = Self {
             spawn_call_site,
+            spawn_call_site_hash: hasher.finish(),
             parent_signature_hash: self.signature_hash,
             counter: *counter,
             signature_hash: 0,
@@ -203,7 +207,28 @@ impl TaskSignature {
         ts.signature_hash = hasher.finish();
         return ts;
     }
+
+    #[allow(unused)]
+    pub fn static_create_location(self : &TaskSignature) -> u64 {
+        return self.spawn_call_site_hash;
+    }
+
+    #[allow(unused)]
+    pub fn single_thread_ctxt(self : &TaskSignature) -> u64 {
+        return self.counter as u64;
+    }
+
+    #[allow(unused)]
+    pub fn multi_thread_ctxt(self : &TaskSignature) -> u64 {
+        return self.parent_signature_hash;
+    }
+
+    #[allow(unused)]
+    pub fn signature_hash(self : &TaskSignature) -> u64 {
+        return self.signature_hash;
+    }
 }
+
 
 impl Hash for TaskSignature {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -314,7 +339,7 @@ impl Task {
         }
 
         error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len).in_scope(
-            || event!(Level::INFO, task_id = ?task.id, signature = task.signature.signature_hash, "created task"),
+            || event!(Level::INFO, task_id = ?task.id, signature = task.signature, "created task"),
         );
 
         task
