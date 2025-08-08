@@ -9,6 +9,7 @@ use crate::thread::LocalKey;
 use bitvec::prelude::*;
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hasher;
@@ -151,11 +152,12 @@ where
 
 #[derive(Debug, Clone)]
 pub(crate) struct TaskSignature {
-    #[allow(unused)]
     spawn_call_site: &'static Location<'static>,
-    #[allow(unused)]
     parent_signature_hash: u64,
+    counter: u32,
     signature_hash: u64,
+
+    child_counters : HashMap<&'static Location<'static>, u32>,
 }
 
 impl TaskSignature {
@@ -174,8 +176,10 @@ impl TaskSignature {
             spawn_call_site,
             parent_signature_hash: 0,
             signature_hash: 0,
+            counter: 0,
+            child_counters: HashMap::new(),
         };
-        ts.hash(hasher);
+        spawn_call_site.hash(hasher);
         ts.signature_hash = hasher.finish();
         return ts;
     }
@@ -185,10 +189,15 @@ impl TaskSignature {
         spawn_call_site: &'static Location<'static>,
         hasher: &mut impl Hasher,
     ) -> TaskSignature {
+        let counter = self.child_counters.entry(spawn_call_site).or_insert(0);
+        *counter += 1;
+
         let mut ts = Self {
             spawn_call_site,
             parent_signature_hash: self.signature_hash,
+            counter: *counter,
             signature_hash: 0,
+            child_counters: HashMap::new(),
         };
         ts.hash(hasher);
         ts.signature_hash = hasher.finish();
@@ -200,6 +209,7 @@ impl Hash for TaskSignature {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.parent_signature_hash.hash(state);
         self.spawn_call_site.hash(state);
+        self.counter.hash(state);
     }
 }
 
