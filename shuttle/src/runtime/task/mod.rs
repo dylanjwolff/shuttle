@@ -158,7 +158,7 @@ pub(crate) struct TaskSignature {
     counter: u32,
     signature_hash: u64,
 
-    child_counters : HashMap<&'static Location<'static>, u32>,
+    child_counters: HashMap<&'static Location<'static>, u32>,
 }
 
 impl TaskSignature {
@@ -209,26 +209,25 @@ impl TaskSignature {
     }
 
     #[allow(unused)]
-    pub fn static_create_location(self : &TaskSignature) -> u64 {
+    pub fn static_create_location(self: &TaskSignature) -> u64 {
         return self.spawn_call_site_hash;
     }
 
     #[allow(unused)]
-    pub fn single_thread_ctxt(self : &TaskSignature) -> u64 {
+    pub fn single_thread_ctxt(self: &TaskSignature) -> u64 {
         return self.counter as u64;
     }
 
     #[allow(unused)]
-    pub fn multi_thread_ctxt(self : &TaskSignature) -> u64 {
+    pub fn multi_thread_ctxt(self: &TaskSignature) -> u64 {
         return self.parent_signature_hash;
     }
 
     #[allow(unused)]
-    pub fn signature_hash(self : &TaskSignature) -> u64 {
+    pub fn signature_hash(self: &TaskSignature) -> u64 {
         return self.signature_hash;
     }
 }
-
 
 impl Hash for TaskSignature {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -339,7 +338,7 @@ impl Task {
         }
 
         error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len).in_scope(
-            || event!(Level::INFO, task_id = ?task.id, signature = task.signature, "created task"),
+            || event!(Level::INFO, task_id = ?task.id, signature = task.signature.signature_hash(), static_create_location = task.signature.static_create_location(), "created task"),
         );
 
         task

@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use test_log::test;
 
+use crate::basic::execution::task_signature_test::check_n_different_signatures;
+
 #[test]
 fn basic_scheduler_test() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -290,19 +292,22 @@ fn do_reset_step_count_panics() {
 
 // Common test infrastructure for task signature tests
 mod task_signature_test {
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tracing::field::{Field, Visit};
     use tracing::{Event, Id, Metadata, Subscriber};
 
     #[derive(Clone)]
     pub struct SignatureSubscriber {
-        pub signatures: Arc<Mutex<Vec<u64>>>,
+        pub signatures: Arc<Mutex<HashMap<u64, usize>>>,
+        pub static_create_locations: Arc<Mutex<HashMap<u64, usize>>>,
     }
 
     impl SignatureSubscriber {
         pub fn new() -> Self {
             Self {
-                signatures: Arc::new(Mutex::new(Vec::new())),
+                signatures: Arc::new(Mutex::new(HashMap::new())),
+                static_create_locations: Arc::new(Mutex::new(HashMap::new())),
             }
         }
     }
@@ -326,6 +331,7 @@ mod task_signature_test {
                 struct SignatureVisitor {
                     task_id: Option<String>,
                     signature: Option<u64>,
+                    static_create_location: Option<u64>,
                 }
                 impl Visit for SignatureVisitor {
                     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
@@ -337,16 +343,33 @@ mod task_signature_test {
                         if field.name() == "signature" {
                             self.signature = Some(value);
                         }
+                        if field.name() == "static_create_location" {
+                            self.static_create_location = Some(value);
+                        }
                     }
                 }
                 let mut visitor = SignatureVisitor {
                     task_id: None,
                     signature: None,
+                    static_create_location: None,
                 };
                 event.record(&mut visitor);
 
                 if let Some(sig) = visitor.signature {
-                    self.signatures.lock().unwrap().push(sig);
+                    self.signatures
+                        .lock()
+                        .unwrap()
+                        .entry(sig)
+                        .and_modify(|counter| *counter += 1)
+                        .or_insert(1);
+                }
+                if let Some(loc) = visitor.static_create_location {
+                    self.static_create_locations
+                        .lock()
+                        .unwrap()
+                        .entry(loc)
+                        .and_modify(|counter| *counter += 1)
+                        .or_insert(1);
                 }
             }
         }
@@ -355,25 +378,16 @@ mod task_signature_test {
         fn exit(&self, _span: &Id) {}
     }
 
-    pub fn verify_same_signatures(signatures: &Arc<Mutex<Vec<u64>>>, expected_count: usize, test_name: &str) {
-        let collected_signatures = signatures.lock().unwrap();
-        println!(
-            "{}: Total signatures captured: {}",
-            test_name,
-            collected_signatures.len()
-        );
+    pub fn check_n_same_signatures(signatures: &Arc<Mutex<HashMap<u64, usize>>>, expected_count: usize) {
+        let signatures = signatures.lock().unwrap();
+        println!("Total signatures captured: {}", signatures.len());
 
-        let mut signature_counts = std::collections::HashMap::new();
-        for &sig in collected_signatures.iter() {
-            *signature_counts.entry(sig).or_insert(0) += 1;
-        }
+        println!("Signature counts: {:?}", signatures);
 
-        println!("{}: Signature counts: {:?}", test_name, signature_counts);
-
-        let worker_signatures: Vec<u64> = signature_counts
+        let worker_signatures: Vec<u64> = signatures
             .iter()
-            .filter(|(_, &count)| count == expected_count)
-            .map(|(&sig, _)| sig)
+            .filter(|(_, count)| **count == expected_count)
+            .map(|(sig, _)| *sig)
             .collect();
 
         assert_eq!(
@@ -383,27 +397,18 @@ mod task_signature_test {
             expected_count
         );
         println!(
-            "{}: All {} tasks have the same signature: {}",
-            test_name, expected_count, worker_signatures[0]
+            "{} tasks have the same signature: {}",
+            expected_count, worker_signatures[0]
         );
     }
 
-    pub fn verify_different_signatures(signatures: &Arc<Mutex<Vec<u64>>>, expected_count: usize, test_name: &str) {
-        let collected_signatures = signatures.lock().unwrap();
-        println!(
-            "{}: Total signatures captured: {}",
-            test_name,
-            collected_signatures.len()
-        );
+    pub fn check_n_different_signatures(signatures: &Arc<Mutex<HashMap<u64, usize>>>, expected_count: usize) {
+        let signatures = signatures.lock().unwrap();
+        println!("Total signatures captured: {}", signatures.len());
 
-        let mut signature_counts = std::collections::HashMap::new();
-        for &sig in collected_signatures.iter() {
-            *signature_counts.entry(sig).or_insert(0) += 1;
-        }
+        println!("Signature counts: {:?}", signatures);
 
-        println!("{}: Signature counts: {:?}", test_name, signature_counts);
-
-        let unique_signatures: Vec<u64> = signature_counts.keys().cloned().collect();
+        let unique_signatures: Vec<u64> = signatures.keys().cloned().collect();
         assert_eq!(
             unique_signatures.len(),
             expected_count,
@@ -411,18 +416,19 @@ mod task_signature_test {
             expected_count
         );
         println!(
-            "{}: All {} tasks have different signatures: {:?}",
-            test_name, expected_count, unique_signatures
+            "All {} tasks have different signatures: {:?}",
+            expected_count, unique_signatures
         );
     }
 }
 
 #[test]
 fn task_signatures_same_function() {
-    use task_signature_test::{verify_same_signatures, SignatureSubscriber};
+    use task_signature_test::{check_n_same_signatures, SignatureSubscriber};
 
     let subscriber = SignatureSubscriber::new();
     let signatures_clone = Arc::clone(&subscriber.signatures);
+    let static_create_locations_clone = Arc::clone(&subscriber.static_create_locations);
     let _guard = tracing::subscriber::set_default(subscriber);
 
     fn worker_function() {
@@ -443,16 +449,18 @@ fn task_signatures_same_function() {
         }
     });
 
-    verify_same_signatures(&signatures_clone, 10, "sync test");
+    check_n_same_signatures(&static_create_locations_clone, 10);
+    check_n_different_signatures(&signatures_clone, 11);
 }
 
 #[test]
 fn task_signatures_same_function_async() {
     use shuttle::future;
-    use task_signature_test::{verify_same_signatures, SignatureSubscriber};
+    use task_signature_test::{check_n_same_signatures, SignatureSubscriber};
 
     let subscriber = SignatureSubscriber::new();
     let signatures_clone = Arc::clone(&subscriber.signatures);
+    let static_create_locations_clone = Arc::clone(&subscriber.static_create_locations);
     let _guard = tracing::subscriber::set_default(subscriber);
 
     async fn async_worker_function() {
@@ -475,12 +483,13 @@ fn task_signatures_same_function_async() {
         });
     });
 
-    verify_same_signatures(&signatures_clone, 10, "async test");
+    check_n_same_signatures(&static_create_locations_clone, 10);
+    check_n_different_signatures(&signatures_clone, 11);
 }
 
 #[test]
 fn task_signatures_different_functions() {
-    use task_signature_test::{verify_different_signatures, SignatureSubscriber};
+    use task_signature_test::{check_n_different_signatures, SignatureSubscriber};
 
     let subscriber = SignatureSubscriber::new();
     let signatures_clone = Arc::clone(&subscriber.signatures);
@@ -499,13 +508,13 @@ fn task_signatures_different_functions() {
         handle2.join().unwrap();
     });
 
-    verify_different_signatures(&signatures_clone, 3, "sync different functions test");
+    check_n_different_signatures(&signatures_clone, 3);
 }
 
 #[test]
 fn task_signatures_different_functions_async() {
     use shuttle::future;
-    use task_signature_test::{verify_different_signatures, SignatureSubscriber};
+    use task_signature_test::{check_n_different_signatures, SignatureSubscriber};
 
     let subscriber = SignatureSubscriber::new();
     let signatures_clone = Arc::clone(&subscriber.signatures);
@@ -526,5 +535,5 @@ fn task_signatures_different_functions_async() {
         });
     });
 
-    verify_different_signatures(&signatures_clone, 3, "async different functions test");
+    check_n_different_signatures(&signatures_clone, 3);
 }
