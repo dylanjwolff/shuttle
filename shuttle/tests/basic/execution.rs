@@ -293,7 +293,7 @@ mod task_signature_test {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tracing::field::{Field, Visit};
-    use tracing::{Event, Id, Metadata, Subscriber};
+    use tracing::{trace, Event, Id, Metadata, Subscriber};
 
     #[derive(Clone)]
     pub struct SignatureSubscriber {
@@ -378,9 +378,9 @@ mod task_signature_test {
 
     pub fn check_n_same_signatures(signatures: &Arc<Mutex<HashMap<u64, usize>>>, expected_count: usize) {
         let signatures = signatures.lock().unwrap();
-        println!("Total signatures captured: {}", signatures.len());
+        trace!("Total signatures captured: {}", signatures.len());
 
-        println!("Signature counts: {:?}", signatures);
+        trace!("Signature counts: {:?}", signatures);
 
         let worker_signatures: Vec<u64> = signatures
             .iter()
@@ -394,7 +394,7 @@ mod task_signature_test {
             "Should have exactly one signature appearing {} times",
             expected_count
         );
-        println!(
+        trace!(
             "{} tasks have the same signature: {}",
             expected_count, worker_signatures[0]
         );
@@ -402,9 +402,9 @@ mod task_signature_test {
 
     pub fn check_n_different_signatures(signatures: &Arc<Mutex<HashMap<u64, usize>>>, expected_count: usize) {
         let signatures = signatures.lock().unwrap();
-        println!("Total signatures captured: {}", signatures.len());
+        trace!("Total signatures captured: {}", signatures.len());
 
-        println!("Signature counts: {:?}", signatures);
+        trace!("Signature counts: {:?}", signatures);
 
         let unique_signatures: Vec<u64> = signatures.keys().cloned().collect();
         assert_eq!(
@@ -413,7 +413,7 @@ mod task_signature_test {
             "Should have {} different signatures",
             expected_count
         );
-        println!(
+        trace!(
             "All {} tasks have different signatures: {:?}",
             expected_count, unique_signatures
         );
