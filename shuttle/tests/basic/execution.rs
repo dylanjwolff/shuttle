@@ -10,8 +10,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use test_log::test;
 
-use crate::basic::execution::task_signature_test::check_n_different_signatures;
-
 #[test]
 fn basic_scheduler_test() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -420,150 +418,142 @@ mod task_signature_test {
             expected_count, unique_signatures
         );
     }
+
+    pub fn run_test_n_iterations_with_subscriber<F>(
+        test_fn: F,
+        iterations: usize,
+    ) -> (Arc<Mutex<HashMap<u64, usize>>>, Arc<Mutex<HashMap<u64, usize>>>)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        use shuttle::{scheduler::RandomScheduler, Runner};
+
+        let subscriber = SignatureSubscriber::new();
+        let signatures = Arc::clone(&subscriber.signatures);
+        let static_create_locations = Arc::clone(&subscriber.static_create_locations);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let scheduler = RandomScheduler::new(iterations);
+        let runner = Runner::new(scheduler, Default::default());
+        runner.run(test_fn);
+
+        (signatures, static_create_locations)
+    }
 }
 
 #[test]
 fn task_signatures_same_function() {
-    use task_signature_test::{check_n_same_signatures, SignatureSubscriber};
+    use task_signature_test::{
+        check_n_different_signatures, check_n_same_signatures, run_test_n_iterations_with_subscriber,
+    };
 
-    let subscriber = SignatureSubscriber::new();
-    let signatures_clone = Arc::clone(&subscriber.signatures);
-    let static_create_locations_clone = Arc::clone(&subscriber.static_create_locations);
-    let _guard = tracing::subscriber::set_default(subscriber);
+    fn worker_function() {}
 
-    fn worker_function() {
-        // Simple worker function
-    }
+    let (signatures, static_create_locations) = run_test_n_iterations_with_subscriber(
+        || {
+            let mut handles = Vec::new();
+            for _ in 0..10 {
+                handles.push(thread::spawn(worker_function));
+            }
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        },
+        1,
+    );
 
-    let scheduler = RandomScheduler::new(1);
-    let runner = Runner::new(scheduler, Default::default());
-    runner.run(move || {
-        let mut handles = Vec::new();
-
-        for _ in 0..10 {
-            handles.push(thread::spawn(worker_function));
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-    });
-
-    check_n_same_signatures(&static_create_locations_clone, 10);
-    check_n_different_signatures(&signatures_clone, 11);
+    check_n_same_signatures(&static_create_locations, 10);
+    check_n_different_signatures(&signatures, 11);
 }
 
 #[test]
 fn task_signatures_same_function_async() {
     use shuttle::future;
-    use task_signature_test::{check_n_same_signatures, SignatureSubscriber};
+    use task_signature_test::{
+        check_n_different_signatures, check_n_same_signatures, run_test_n_iterations_with_subscriber,
+    };
 
-    let subscriber = SignatureSubscriber::new();
-    let signatures_clone = Arc::clone(&subscriber.signatures);
-    let static_create_locations_clone = Arc::clone(&subscriber.static_create_locations);
-    let _guard = tracing::subscriber::set_default(subscriber);
+    async fn async_worker_function() {}
 
-    async fn async_worker_function() {
-        // Simple async worker function
-    }
-
-    let scheduler = RandomScheduler::new(1);
-    let runner = Runner::new(scheduler, Default::default());
-    runner.run(move || {
-        let mut handles = Vec::new();
-
-        for _ in 0..10 {
-            handles.push(future::spawn(async_worker_function()));
-        }
-
-        future::block_on(async {
-            for handle in handles {
-                handle.await.unwrap();
+    let (signatures, static_create_locations) = run_test_n_iterations_with_subscriber(
+        || {
+            let mut handles = Vec::new();
+            for _ in 0..10 {
+                handles.push(future::spawn(async_worker_function()));
             }
-        });
-    });
+            future::block_on(async {
+                for handle in handles {
+                    handle.await.unwrap();
+                }
+            });
+        },
+        1,
+    );
 
-    check_n_same_signatures(&static_create_locations_clone, 10);
-    check_n_different_signatures(&signatures_clone, 11);
+    check_n_same_signatures(&static_create_locations, 10);
+    check_n_different_signatures(&signatures, 11);
 }
 
 #[test]
 fn task_signatures_different_functions() {
-    use task_signature_test::{check_n_different_signatures, SignatureSubscriber};
-
-    let subscriber = SignatureSubscriber::new();
-    let signatures_clone = Arc::clone(&subscriber.signatures);
-    let _guard = tracing::subscriber::set_default(subscriber);
+    use task_signature_test::{check_n_different_signatures, run_test_n_iterations_with_subscriber};
 
     fn worker_function_1() {}
     fn worker_function_2() {}
 
-    let scheduler = RandomScheduler::new(1);
-    let runner = Runner::new(scheduler, Default::default());
-    runner.run(move || {
-        let handle1 = thread::spawn(worker_function_1);
-        let handle2 = thread::spawn(worker_function_2);
+    let (signatures, _) = run_test_n_iterations_with_subscriber(
+        || {
+            let handle1 = thread::spawn(worker_function_1);
+            let handle2 = thread::spawn(worker_function_2);
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+        },
+        1,
+    );
 
-        handle1.join().unwrap();
-        handle2.join().unwrap();
-    });
-
-    check_n_different_signatures(&signatures_clone, 3);
+    check_n_different_signatures(&signatures, 3);
 }
 
 #[test]
 fn task_signatures_different_functions_async() {
     use shuttle::future;
-    use task_signature_test::{check_n_different_signatures, SignatureSubscriber};
-
-    let subscriber = SignatureSubscriber::new();
-    let signatures_clone = Arc::clone(&subscriber.signatures);
-    let _guard = tracing::subscriber::set_default(subscriber);
+    use task_signature_test::{check_n_different_signatures, run_test_n_iterations_with_subscriber};
 
     async fn async_worker_function_1() {}
     async fn async_worker_function_2() {}
 
-    let scheduler = RandomScheduler::new(1);
-    let runner = Runner::new(scheduler, Default::default());
-    runner.run(move || {
-        let handle1 = future::spawn(async_worker_function_1());
-        let handle2 = future::spawn(async_worker_function_2());
+    let (signatures, _) = run_test_n_iterations_with_subscriber(
+        || {
+            let handle1 = future::spawn(async_worker_function_1());
+            let handle2 = future::spawn(async_worker_function_2());
+            future::block_on(async {
+                handle1.await.unwrap();
+                handle2.await.unwrap();
+            });
+        },
+        1,
+    );
 
-        future::block_on(async {
-            handle1.await.unwrap();
-            handle2.await.unwrap();
-        });
-    });
-
-    check_n_different_signatures(&signatures_clone, 3);
+    check_n_different_signatures(&signatures, 3);
 }
 #[test]
 fn task_signatures_consistent_across_iterations() {
-    use task_signature_test::SignatureSubscriber;
-
-    let subscriber = SignatureSubscriber::new();
-    let signatures_clone = Arc::clone(&subscriber.signatures);
-    let _guard = tracing::subscriber::set_default(subscriber);
+    use task_signature_test::{check_n_different_signatures, run_test_n_iterations_with_subscriber};
 
     fn worker_with_nested_spawn() {
-        // Create a nested task from within this task
-        let handle = thread::spawn(|| {
-            // Nested worker function
-        });
+        let handle = thread::spawn(|| {});
         handle.join().unwrap();
     }
 
-    // Run multiple iterations to ensure signatures are consistent
-    let scheduler = RandomScheduler::new(100);
-    let runner = Runner::new(scheduler, Default::default());
-    runner.run(move || {
-        // Main task spawns a worker that itself spawns another task
-        let handle1 = thread::spawn(worker_with_nested_spawn);
-        let handle2 = thread::spawn(worker_with_nested_spawn);
-        
-        handle1.join().unwrap();
-        handle2.join().unwrap();
-    });
+    let (signatures, _) = run_test_n_iterations_with_subscriber(
+        || {
+            let handle1 = thread::spawn(worker_with_nested_spawn);
+            let handle2 = thread::spawn(worker_with_nested_spawn);
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+        },
+        100,
+    );
 
-    check_n_different_signatures(&signatures_clone, 5);
+    check_n_different_signatures(&signatures, 5);
 }
