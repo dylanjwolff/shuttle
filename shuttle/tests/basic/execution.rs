@@ -537,3 +537,33 @@ fn task_signatures_different_functions_async() {
 
     check_n_different_signatures(&signatures_clone, 3);
 }
+#[test]
+fn task_signatures_consistent_across_iterations() {
+    use task_signature_test::SignatureSubscriber;
+
+    let subscriber = SignatureSubscriber::new();
+    let signatures_clone = Arc::clone(&subscriber.signatures);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    fn worker_with_nested_spawn() {
+        // Create a nested task from within this task
+        let handle = thread::spawn(|| {
+            // Nested worker function
+        });
+        handle.join().unwrap();
+    }
+
+    // Run multiple iterations to ensure signatures are consistent
+    let scheduler = RandomScheduler::new(100);
+    let runner = Runner::new(scheduler, Default::default());
+    runner.run(move || {
+        // Main task spawns a worker that itself spawns another task
+        let handle1 = thread::spawn(worker_with_nested_spawn);
+        let handle2 = thread::spawn(worker_with_nested_spawn);
+        
+        handle1.join().unwrap();
+        handle2.join().unwrap();
+    });
+
+    check_n_different_signatures(&signatures_clone, 5);
+}
