@@ -1,11 +1,6 @@
-// To use the scoped version of the `generator` API, we'd need a way to store each continuation's
-// `Scope` object locally. Normally that would be TLS but those use platform threads, so aren't
-// aware of `generator` threads. Instead we just fall back to using the unscoped API.
-// TODO: upgrade to the new scoped generator API
-#![allow(deprecated)]
-
 use crate::runtime::execution::ExecutionState;
-use generator::{Generator, Gn};
+use corosensei::Yielder;
+use corosensei::{Coroutine, CoroutineResult, stack::DefaultStack};
 use scoped_tls::scoped_thread_local;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -24,9 +19,10 @@ scoped_thread_local! {
 /// to run via `initialize`. A continuation is only reusable if the previous function it was
 /// executing completed.
 pub(crate) struct Continuation {
-    generator: Generator<'static, ContinuationInput, ContinuationOutput>,
+    coroutine: Coroutine<ContinuationInput, ContinuationOutput, ContinuationOutput>,
     function: ContinuationFunction,
     state: ContinuationState,
+    pub yielder: *const Yielder<ContinuationInput, ContinuationOutput>,
 }
 
 /// A cell to pass functions into continuations
@@ -41,16 +37,15 @@ unsafe impl Send for ContinuationFunction {}
 
 /// Inputs that we can pass to a continuation.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum ContinuationInput {
+pub enum ContinuationInput {
     Resume,
     Exit,
 }
 
 /// Outputs that a continuation can pass back to us
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum ContinuationOutput {
-    Yielded,
-    Finished,
+pub enum ContinuationOutput {
+    Finished(*const Yielder<ContinuationInput, ContinuationOutput>),
     Exited,
 }
 
@@ -66,21 +61,22 @@ impl Continuation {
     pub fn new(stack_size: usize) -> Self {
         let function = ContinuationFunction(Rc::new(Cell::new(None)));
 
-        let mut gen = {
+        let mut coroutine = {
             let function = function.clone();
 
-            Gn::new_opt(stack_size, move || {
+            Coroutine::with_stack(DefaultStack::new(stack_size).unwrap(), move |yielder, _input| {
                 // Move the whole `ContinuationFunction`, not just its field (Rust 2021 thing)
                 let _ = &function;
 
+                // eprintln!("Yielder {:?}", yielder as *const _);
                 loop {
                     // Tell the caller we've finished the previous user function (or if this is our
                     // first time around the loop, the caller below expects us to pretend we've
                     // finished the previous function).
-                    match generator::yield_(ContinuationOutput::Finished) {
-                        None | Some(ContinuationInput::Exit) => break,
-                        _ => (),
-                    }
+                    match yielder.suspend(ContinuationOutput::Finished(yielder as *const _)) {
+                        ContinuationInput::Exit => break,
+                        ContinuationInput::Resume => {},
+                    };
 
                     let f = function.0.take().expect("must have a function to run");
 
@@ -91,12 +87,16 @@ impl Continuation {
             })
         };
 
-        // Resume the generator once to get it into the loop
-        let ret = gen.resume().unwrap();
-        debug_assert_eq!(ret, ContinuationOutput::Finished);
+        // Resume the coroutine once to get it into the loop
+        let yielder = match coroutine.resume(ContinuationInput::Resume) {
+            CoroutineResult::Yield(ContinuationOutput::Finished(yielder)) => yielder,
+            _ => panic!("Coroutine should yield the yielder on first resume"),
+        };
 
+        // eprintln!("Yielder ret {:?}", yielder as *const _);
         Self {
-            generator: gen,
+            coroutine,
+            yielder,
             function,
             state: ContinuationState::NotReady,
         }
@@ -128,15 +128,19 @@ impl Continuation {
             "continuation should not exit if resumed from user code"
         );
 
-        ret == ContinuationOutput::Finished
+        if let ContinuationOutput::Finished(_) = ret { true } else { false }
     }
 
     fn resume_with_input(&mut self, input: ContinuationInput) -> ContinuationOutput {
-        self.generator.set_para(input);
-        let ret = self.generator.resume().unwrap();
-        if ret == ContinuationOutput::Finished {
+        let ret = match self.coroutine.resume(input) {
+            CoroutineResult::Yield(output) => output,
+            CoroutineResult::Return(output) => output,
+        };
+
+        if let ContinuationOutput::Finished(_) = ret { 
             self.state = ContinuationState::NotReady;
         }
+
         ret
     }
 
@@ -186,6 +190,7 @@ impl ContinuationPool {
     fn acquire_inner(&self, stack_size: usize) -> PooledContinuation {
         // TODO add a check to ensure that if we recycled a continuation, its
         // TODO allocated stack size is at least the requested `stack_size`
+
         let continuation = self
             .continuations
             .borrow_mut()
@@ -218,7 +223,7 @@ impl Drop for ContinuationPool {
 /// A thin wrapper around a `Continuation` that returns it to a `ContinuationPool`
 /// when dropped, but only if it's reusable.
 pub(crate) struct PooledContinuation {
-    continuation: Option<Continuation>,
+    pub continuation: Option<Continuation>,
     queue: Rc<RefCell<VecDeque<Continuation>>>,
 }
 
@@ -254,12 +259,20 @@ impl std::fmt::Debug for PooledContinuation {
 // Safety: these aren't sent across real threads
 unsafe impl Send for PooledContinuation {}
 
+
 /// Possibly yield back to the executor to perform a context switch.
 pub(crate) fn switch() {
     crate::annotations::record_tick();
     if ExecutionState::maybe_yield() {
-        let r = generator::yield_(ContinuationOutput::Yielded).unwrap();
-        assert!(matches!(r, ContinuationInput::Resume));
+        let yielder = ExecutionState::with(|state| { 
+            state.current()
+            .yielder
+        });
+        let yielder_ref : &Yielder<ContinuationInput, ContinuationOutput> = unsafe { std::mem::transmute(yielder) };
+        match yielder_ref.suspend(ContinuationOutput::Finished(yielder)) {
+            ContinuationInput::Exit => panic!("unexpected exit continuation"),
+            ContinuationInput::Resume => {},
+        };
     }
 }
 
@@ -290,7 +303,7 @@ mod tests {
 
         let mut c = pool.acquire_inner(config.stack_size);
         c.initialize(Box::new(|| {
-            generator::yield_with(ContinuationOutput::Yielded);
+            switch(); // Use our switch function instead of direct generator yield
             let _ = 1 + 1;
         }));
 
