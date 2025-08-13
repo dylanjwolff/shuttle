@@ -54,8 +54,11 @@ pub enum ContinuationOutput {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ContinuationState {
     NotReady, // has no function in its cell; waiting for input about what to do next
-    Ready,    // has a function in its cell; waiting for input about what to do next
+    Initialized,// has a function in its cell, but hasn't started running yet
+    Ready,    // has a suspended function in its cell; waiting for input about what to do next
     Running,  // currently inside a user-provided function
+    FinishedIteration, // has finished the previous function, can be initialized with a new one
+    Exited,   // the internal coroutine has exited its loop and cannot receive new functions to execute
 }
 
 impl Continuation {
@@ -65,7 +68,11 @@ impl Continuation {
         let mut coroutine = {
             let function = function.clone();
 
-            Coroutine::with_stack(DefaultStack::new(stack_size).unwrap(), move |yielder, _input| {
+            Coroutine::with_stack(DefaultStack::new(stack_size).unwrap(), move |yielder, input| {
+                if let ContinuationInput::Exit = input { 
+                    return ContinuationOutput::Exited;
+                }
+
                 // Move the whole `ContinuationFunction`, not just its field (Rust 2021 thing)
                 let _ = &function;
 
@@ -106,21 +113,20 @@ impl Continuation {
     /// Provide a new function for the continuation to execute. The continuation must
     /// be in reusable state.
     pub fn initialize(&mut self, fun: Box<dyn FnOnce()>) {
-        debug_assert_eq!(
-            self.state,
-            ContinuationState::NotReady,
+        debug_assert!(
+            self.reusable(),
             "shouldn't replace a function before it runs"
         );
 
         let old = self.function.0.replace(Some(fun));
         debug_assert!(old.is_none(), "shouldn't replace a function before it runs");
 
-        self.state = ContinuationState::Ready;
+        self.state = ContinuationState::Initialized;
     }
 
     /// Resume the continuation, and returns true if the function it was executing has finished.
     pub fn resume(&mut self) -> bool {
-        debug_assert!(self.state == ContinuationState::Ready || self.state == ContinuationState::Running);
+        debug_assert!(self.state == ContinuationState::Ready || self.state == ContinuationState::Initialized);
 
         let ret = self.resume_with_input(ContinuationInput::Resume);
         debug_assert_ne!(
@@ -133,16 +139,21 @@ impl Continuation {
     }
 
     fn resume_with_input(&mut self, input: ContinuationInput) -> ContinuationOutput {
-        let ret = match self.coroutine.resume(input) {
-            CoroutineResult::Yield(output) => output,
-            CoroutineResult::Return(_output) => panic!("kdjfa"),
-        };
-
-        if let ContinuationOutput::Finished(_) = ret { 
-            self.state = ContinuationState::NotReady;
+        self.state = ContinuationState::Running;
+        match self.coroutine.resume(input) {
+            CoroutineResult::Yield(output) => {
+                if let ContinuationOutput::Finished(_) = output { 
+                    self.state = ContinuationState::FinishedIteration;
+                } else {
+                    self.state = ContinuationState::Ready;
+                }
+                output
+            }
+            CoroutineResult::Return(output) => {
+                self.state = ContinuationState::Exited;
+                output
+            }
         }
-
-        ret
     }
 
     /// A continuation is reusable if it has completed running a user function and is waiting
@@ -150,7 +161,7 @@ impl Continuation {
     /// (for example, if the DFS scheduler terminated a path early, a function might not have
     /// completed, and resuming it will take us to somewhere arbitrary in user code).
     fn reusable(&self) -> bool {
-        self.state == ContinuationState::NotReady
+        self.state == ContinuationState::NotReady || self.state == ContinuationState::FinishedIteration
     }
 }
 
@@ -161,9 +172,17 @@ impl Drop for Continuation {
         // arbitrary user code. Its resources will still be cleaned up when the underlying
         // generator is dropped, but doing so is slower (the generator impl invokes a panic
         // inside the continuation), so this drop handler exists to avoid it when possible.
-        if self.reusable() {
-            let ret = self.resume_with_input(ContinuationInput::Exit);
-            debug_assert_eq!(ret, ContinuationOutput::Exited);
+        match self.state {
+            ContinuationState::Initialized | ContinuationState::FinishedIteration | ContinuationState::NotReady => {
+                let ret = self.resume_with_input(ContinuationInput::Exit);
+                debug_assert_eq!(ret, ContinuationOutput::Exited);
+            }
+            ContinuationState::Running | ContinuationState::Ready => {
+                // panic!("Coroutine should be reset before dropping");
+                unsafe { self.coroutine.force_reset() };
+                // self.coroutine.force_unwind();
+            }
+            ContinuationState::Exited => {}
         }
     }
 }
@@ -201,22 +220,6 @@ impl ContinuationPool {
         PooledContinuation {
             continuation: Some(continuation),
             queue: self.continuations.clone(),
-        }
-    }
-}
-
-impl Drop for ContinuationPool {
-    fn drop(&mut self) {
-        // It's not safe to run Continuation's drop handler while dropping ContinuationPool,
-        // because ContinuationPool is dropped by a thread local's destructor, and Continuation's
-        // drop handler involves resuming a continuation, which reads a different thread local
-        // from inside the generator implementation. Reading thread locals during thread local
-        // destruction is forbidden on Linux.
-        //
-        // So we cheat here by prematurely marking the Continuation as unreusable. The underlying
-        // resources will still get cleaned up, but we won't try to resume the continuation.
-        for c in self.continuations.borrow_mut().iter_mut() {
-            c.state = ContinuationState::Running;
         }
     }
 }
