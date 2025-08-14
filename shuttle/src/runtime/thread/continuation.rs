@@ -162,9 +162,7 @@ impl Continuation {
     /// (for example, if the DFS scheduler terminated a path early, a function might not have
     /// completed, and resuming it will take us to somewhere arbitrary in user code).
     fn reusable(&self) -> bool {
-        self.state == ContinuationState::NotReady
-            || self.state == ContinuationState::FinishedIteration
-            || self.state == ContinuationState::Initialized
+        self.state == ContinuationState::NotReady || self.state == ContinuationState::FinishedIteration
     }
 }
 
