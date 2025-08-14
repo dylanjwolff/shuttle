@@ -333,10 +333,12 @@ impl ExecutionState {
                 if let Ok(mut state) = cell.try_borrow_mut() {
                     Some(f(&mut state))
                 } else {
+                    eprintln!("Execution state not borrowable");
                     None
                 }
             })
         } else {
+            eprintln!("Execution state not set");
             None
         }
     }

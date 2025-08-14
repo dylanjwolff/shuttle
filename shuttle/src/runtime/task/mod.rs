@@ -4,7 +4,9 @@ use crate::runtime::storage::{AlreadyDestructedError, StorageKey, StorageMap};
 use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::labels::Labels;
 use crate::runtime::thread;
-use crate::runtime::thread::continuation::{ContinuationInput, ContinuationOutput, ContinuationPool, PooledContinuation};
+use crate::runtime::thread::continuation::{
+    ContinuationInput, ContinuationOutput, ContinuationPool, PooledContinuation,
+};
 use crate::thread::LocalKey;
 use bitvec::prelude::*;
 use corosensei::Yielder;
@@ -157,7 +159,7 @@ pub struct Task {
     park_state: ParkState,
 
     pub(super) continuation: Rc<RefCell<PooledContinuation>>,
-    pub(super) yielder : *const Yielder<ContinuationInput, ContinuationOutput>,
+    pub(super) yielder: *const Yielder<ContinuationInput, ContinuationOutput>,
 
     pub(crate) clock: VectorClock,
 

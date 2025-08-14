@@ -1,6 +1,6 @@
 use crate::runtime::execution::ExecutionState;
 use corosensei::Yielder;
-use corosensei::{Coroutine, CoroutineResult, stack::DefaultStack};
+use corosensei::{stack::DefaultStack, Coroutine, CoroutineResult};
 use scoped_tls::scoped_thread_local;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -53,12 +53,12 @@ pub enum ContinuationOutput {
 /// The current state of a continuation. Lifecycle runs from top to bottom.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ContinuationState {
-    NotReady, // has no function in its cell; waiting for input about what to do next
-    Initialized,// has a function in its cell, but hasn't started running yet
-    Ready,    // has a suspended function in its cell; waiting for input about what to do next
-    Running,  // currently inside a user-provided function
+    NotReady,          // has no function in its cell; waiting for input about what to do next
+    Initialized,       // has a function in its cell, but hasn't started running yet
+    Ready,             // has a suspended function in its cell; waiting for input about what to do next
+    Running,           // currently inside a user-provided function
     FinishedIteration, // has finished the previous function, can be initialized with a new one
-    Exited,   // the internal coroutine has exited its loop and cannot receive new functions to execute
+    Exited,            // the internal coroutine has exited its loop and cannot receive new functions to execute
 }
 
 impl Continuation {
@@ -69,7 +69,7 @@ impl Continuation {
             let function = function.clone();
 
             Coroutine::with_stack(DefaultStack::new(stack_size).unwrap(), move |yielder, input| {
-                if let ContinuationInput::Exit = input { 
+                if let ContinuationInput::Exit = input {
                     return ContinuationOutput::Exited;
                 }
 
@@ -83,7 +83,7 @@ impl Continuation {
                     // finished the previous function).
                     match yielder.suspend(ContinuationOutput::Finished(yielder as *const _)) {
                         ContinuationInput::Exit => break,
-                        ContinuationInput::Resume => {},
+                        ContinuationInput::Resume => {}
                     };
 
                     let f = function.0.take().expect("must have a function to run");
@@ -113,10 +113,7 @@ impl Continuation {
     /// Provide a new function for the continuation to execute. The continuation must
     /// be in reusable state.
     pub fn initialize(&mut self, fun: Box<dyn FnOnce()>) {
-        debug_assert!(
-            self.reusable(),
-            "shouldn't replace a function before it runs"
-        );
+        debug_assert!(self.reusable(), "shouldn't replace a function before it runs");
 
         let old = self.function.0.replace(Some(fun));
         debug_assert!(old.is_none(), "shouldn't replace a function before it runs");
@@ -135,17 +132,21 @@ impl Continuation {
             "continuation should not exit if resumed from user code"
         );
 
-        if let ContinuationOutput::Finished(_) = ret { true } else { false }
+        if let ContinuationOutput::Finished(_) = ret {
+            true
+        } else {
+            false
+        }
     }
 
     fn resume_with_input(&mut self, input: ContinuationInput) -> ContinuationOutput {
         self.state = ContinuationState::Running;
         match self.coroutine.resume(input) {
             CoroutineResult::Yield(output) => {
-                if let ContinuationOutput::Finished(_) = output { 
-                    self.state = ContinuationState::FinishedIteration;
-                } else {
-                    self.state = ContinuationState::Ready;
+                match output {
+                    ContinuationOutput::Finished(_) => self.state = ContinuationState::FinishedIteration,
+                    ContinuationOutput::Yielded => self.state = ContinuationState::Ready,
+                    ContinuationOutput::Exited => self.state = ContinuationState::Exited,
                 }
                 output
             }
@@ -161,7 +162,9 @@ impl Continuation {
     /// (for example, if the DFS scheduler terminated a path early, a function might not have
     /// completed, and resuming it will take us to somewhere arbitrary in user code).
     fn reusable(&self) -> bool {
-        self.state == ContinuationState::NotReady || self.state == ContinuationState::FinishedIteration
+        self.state == ContinuationState::NotReady
+            || self.state == ContinuationState::FinishedIteration
+            || self.state == ContinuationState::Initialized
     }
 }
 
@@ -179,8 +182,12 @@ impl Drop for Continuation {
             }
             ContinuationState::Running | ContinuationState::Ready => {
                 // panic!("Coroutine should be reset before dropping");
-                unsafe { self.coroutine.force_reset() };
-                // self.coroutine.force_unwind();
+                // unsafe { self.coroutine.force_reset() };
+                if ExecutionState::try_with(|state| _ = state.config) == None {
+                    eprintln!("Continuation::drop: ExecutionState not available");
+                }
+
+                self.coroutine.force_unwind();
             }
             ContinuationState::Exited => {}
         }
@@ -263,20 +270,15 @@ impl std::fmt::Debug for PooledContinuation {
 // Safety: these aren't sent across real threads
 unsafe impl Send for PooledContinuation {}
 
-
 /// Possibly yield back to the executor to perform a context switch.
 pub(crate) fn switch() {
     crate::annotations::record_tick();
     if ExecutionState::maybe_yield() {
-        let yielder = ExecutionState::with(|state| { 
-            state.current()
-            .yielder
-        });
+        let yielder = ExecutionState::with(|state| state.current().yielder);
         // println!("switch @ {:?}", yielder);
-        let yielder_ref : &Yielder<ContinuationInput, ContinuationOutput> = unsafe { std::mem::transmute(yielder) };
-        match yielder_ref.suspend(ContinuationOutput::Yielded) {
+        match unsafe { &(*yielder) }.suspend(ContinuationOutput::Yielded) {
             ContinuationInput::Exit => panic!("unexpected exit continuation"),
-            ContinuationInput::Resume => {},
+            ContinuationInput::Resume => {}
         };
     }
 }
