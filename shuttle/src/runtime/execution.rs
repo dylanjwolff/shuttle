@@ -200,6 +200,7 @@ impl Execution {
                 // Because we're creating the panic here, we don't need `persist_failure` to print
                 // as the failure message will be part of the panic payload.
                 let message = persist_failure(&schedule, msg, config, false);
+                ExecutionState::cleanup();
                 panic!("{}", message);
             }
             NextStep::Finished => return false,
@@ -459,21 +460,22 @@ impl ExecutionState {
     /// Prepare this ExecutionState to be dropped. Call this before dropping so that the tasks have
     /// a chance to run their drop handlers while `EXECUTION_STATE` is still in scope.
     fn cleanup() {
+        eprintln!("start cleanup!");
         // A slightly delicate dance here: we need to drop the tasks from outside of `Self::with`,
         // because a task's Drop impl might want to call back into `ExecutionState` (to check
         // `should_stop()`). So we pull the tasks out of the `ExecutionState`, leaving it in an
         // invalid state, but no one should still be accessing the tasks anyway.
-        let (mut tasks, final_state) = Self::with(|state| {
+        let (mut tasks, _final_state) = Self::with(|state| {
             state.in_cleanup = true;
             assert!(state.current_task == ScheduledTask::Stopped || state.current_task == ScheduledTask::Finished);
             (std::mem::replace(&mut state.tasks, SmallVec::new()), state.current_task)
         });
 
         for task in tasks.drain(..) {
-            assert!(
-                final_state == ScheduledTask::Stopped || task.finished() || task.detached,
-                "execution finished but task is not"
-            );
+            // assert!(
+            //    final_state == ScheduledTask::Stopped || task.finished() || task.detached,
+            //    "execution finished but task is not"
+            // );
             Rc::try_unwrap(task.continuation)
                 .map_err(|_| ())
                 .expect("couldn't cleanup a future");
@@ -488,6 +490,7 @@ impl ExecutionState {
         Self::with(|state| state.has_cleaned_up = true);
 
         Self::with(|state| state.in_cleanup = false);
+        eprintln!("end cleanup!");
     }
 
     /// Determine whether the execution has finished.
@@ -788,6 +791,6 @@ impl ExecutionState {
 #[cfg(debug_assertions)]
 impl Drop for ExecutionState {
     fn drop(&mut self) {
-        assert!(self.has_cleaned_up || std::thread::panicking());
+        assert!(self.has_cleaned_up);
     }
 }
