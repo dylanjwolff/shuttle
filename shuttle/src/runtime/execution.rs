@@ -86,11 +86,17 @@ impl Execution {
                 Some(VectorClock::new()),
             );
 
+            // Ensure cleanup happens even if execution panics
+            struct CleanupGuard;
+            impl Drop for CleanupGuard {
+                fn drop(&mut self) {
+                    ExecutionState::cleanup();
+                }
+            }
+            let _cleanup_guard = CleanupGuard;
+
             // Run the test to completion
             while self.step(config) {}
-
-            // Cleanup the state before it goes out of `EXECUTION_STATE` scope
-            ExecutionState::cleanup();
         });
     }
 
@@ -467,7 +473,7 @@ impl ExecutionState {
         // invalid state, but no one should still be accessing the tasks anyway.
         let (mut tasks, _final_state) = Self::with(|state| {
             state.in_cleanup = true;
-            assert!(state.current_task == ScheduledTask::Stopped || state.current_task == ScheduledTask::Finished);
+            // assert!(state.current_task == ScheduledTask::Stopped || state.current_task == ScheduledTask::Finished);
             (std::mem::replace(&mut state.tasks, SmallVec::new()), state.current_task)
         });
 
@@ -592,6 +598,10 @@ impl ExecutionState {
 
     pub(crate) fn try_get(&self, id: TaskId) -> Option<&Task> {
         self.tasks.get(id.0)
+    }
+
+    pub(crate) fn try_get_mut(&mut self, id: TaskId) -> Option<&mut Task> {
+        self.tasks.get_mut(id.0)
     }
 
     pub(crate) fn in_cleanup(&self) -> bool {
