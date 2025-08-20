@@ -165,7 +165,7 @@ impl Continuation {
         self.state == ContinuationState::NotReady || self.state == ContinuationState::FinishedIteration
     }
 }
-
+ 
 impl Drop for Continuation {
     fn drop(&mut self) {
         // If the continuation is reusable, we tell it to exit and gracefully clean up its
@@ -180,11 +180,11 @@ impl Drop for Continuation {
             }
             ContinuationState::Running | ContinuationState::Ready => {
                 // panic!("Coroutine should be reset before dropping");
-                // unsafe { self.coroutine.force_reset() };
                 if ExecutionState::try_with(|state| _ = state.config) == None {
                     eprintln!("Continuation::drop: ExecutionState not available");
                 }
 
+                // if std::thread::panicking() { unsafe { self.coroutine.force_reset(); } } 
                 self.coroutine.force_unwind();
             }
             ContinuationState::Exited => {}

@@ -592,16 +592,16 @@ impl ExecutionState {
         self.try_get(id).unwrap()
     }
 
+    pub(crate) fn try_get_mut(&mut self, id: TaskId) -> Option<&mut Task> {
+        self.tasks.get_mut(id.0)
+    }
+
     pub(crate) fn get_mut(&mut self, id: TaskId) -> &mut Task {
         self.tasks.get_mut(id.0).unwrap()
     }
 
     pub(crate) fn try_get(&self, id: TaskId) -> Option<&Task> {
         self.tasks.get(id.0)
-    }
-
-    pub(crate) fn try_get_mut(&mut self, id: TaskId) -> Option<&mut Task> {
-        self.tasks.get_mut(id.0)
     }
 
     pub(crate) fn in_cleanup(&self) -> bool {
