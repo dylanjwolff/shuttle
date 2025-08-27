@@ -5,7 +5,7 @@ use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::labels::Labels;
 use crate::runtime::thread;
 use crate::runtime::thread::continuation::{ContinuationPool, PooledContinuation};
-use crate::sync::ResourceSignatureData;
+use crate::sync::{ResourceSignatureData, TypedResourceSignature};
 use crate::thread::LocalKey;
 use bitvec::prelude::*;
 use std::any::Any;
@@ -243,6 +243,107 @@ impl PartialEq for TaskSignature {
 
 impl Eq for TaskSignature {}
 
+pub(crate) type Loc = &'static Location<'static>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum Event {
+    AtomicRead(TypedResourceSignature, Loc),
+    AtomicWrite(TypedResourceSignature, Loc),
+    AtomicReadWrite(TypedResourceSignature, Loc),
+    BatchSemaphoreAcq(TypedResourceSignature, Loc),
+    BatchSemaphoreRel(TypedResourceSignature, Loc),
+    BarrierWait(TypedResourceSignature, Loc),
+    CondvarWait(TypedResourceSignature, Loc),
+    CondvarNotify(Loc),
+    Park(Loc),
+    Unpark(TaskSignature, Loc),
+    ChannelSend(TypedResourceSignature, Loc),
+    ChannelRecv(TypedResourceSignature, Loc),
+    Spawn(TaskSignature),
+    Yield(Loc),
+    Sleep(Loc),
+    Exit,
+    Join(TaskSignature, Loc),
+    Unknown,
+}
+
+impl Event {
+    #[track_caller]
+    pub(crate) fn atomic_read(sig: TypedResourceSignature) -> Self {
+        Self::AtomicRead(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn atomic_write(sig: TypedResourceSignature) -> Self {
+        Self::AtomicWrite(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn atomic_read_write(sig: TypedResourceSignature) -> Self {
+        Self::AtomicReadWrite(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn batch_semaphore_acq(sig: TypedResourceSignature) -> Self {
+        Self::BatchSemaphoreAcq(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn batch_semaphore_rel(sig: TypedResourceSignature) -> Self {
+        Self::BatchSemaphoreRel(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn barrier_wait(sig: TypedResourceSignature) -> Self {
+        Self::BarrierWait(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn condvar_wait(sig: TypedResourceSignature) -> Self {
+        Self::CondvarWait(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn condvar_notify() -> Self {
+        Self::CondvarNotify(Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn park() -> Self {
+        Self::Park(Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn unpark(sig: TaskSignature) -> Self {
+        Self::Unpark(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn channel_send(sig: TypedResourceSignature) -> Self {
+        Self::ChannelSend(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn channel_recv(sig: TypedResourceSignature) -> Self {
+        Self::ChannelRecv(sig, Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn yield_now() -> Self {
+        Self::Yield(Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn sleep() -> Self {
+        Self::Sleep(Location::caller())
+    }
+
+    #[track_caller]
+    pub(crate) fn join(sig: TaskSignature) -> Self {
+        Self::Join(sig, Location::caller())
+    }
+}
+
 /// A `Task` represents a user-level unit of concurrency. Each task has an `id` that is unique within
 /// the execution, and a `state` reflecting whether the task is runnable (enabled) or not.
 #[derive(Debug)]
@@ -261,6 +362,8 @@ pub struct Task {
     waker: Waker,
     // Remember whether the waker was invoked while we were running
     woken: bool,
+
+    pub(crate) next_event: Event,
 
     name: Option<String>,
 
@@ -332,6 +435,7 @@ impl Task {
             waiter: None,
             waker,
             woken: false,
+            next_event: Event::Unknown,
             detached: false,
             park_state: ParkState::default(),
             name,
@@ -349,7 +453,7 @@ impl Task {
 
         // Note: the tests for the task signature in [`crate::tests::basic::task`] depend on tracing the task signature and creation point here
         error_span!(parent: parent_span_id, "new_task", parent = ?parent_task_id, i = schedule_len).in_scope(
-            || event!(Level::INFO, task_id = ?task.id, signature = task.signature.signature_hash(), static_create_location = task.signature.static_create_location_hash(), "created task"),
+            || event!(Level::DEBUG, task_id = ?task.id, signature = task.signature.signature_hash(), static_create_location = task.signature.static_create_location_hash(), "created task"),
         );
 
         task
@@ -406,7 +510,7 @@ impl Task {
                 let cx = &mut Context::from_waker(&waker);
                 while future.as_mut().poll(cx).is_pending() {
                     ExecutionState::with(|state| state.current_mut().sleep_unless_woken());
-                    thread::switch();
+                    thread::switch_keep_event();
                 }
             }),
             stack_size,
