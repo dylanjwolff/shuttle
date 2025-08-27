@@ -2,8 +2,8 @@ use crate::runtime::failure::{init_panic_hook, persist_failure, persist_task_fai
 use crate::runtime::storage::{StorageKey, StorageMap};
 use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::labels::Labels;
-use crate::runtime::task::{ChildLabelFn, Task, TaskId, TaskName, TaskSignature, DEFAULT_INLINE_TASKS};
 use crate::runtime::thread;
+use crate::runtime::task::{ChildLabelFn, Event, Task, TaskId, TaskName, TaskSignature, DEFAULT_INLINE_TASKS};
 use crate::runtime::thread::continuation::PooledContinuation;
 use crate::scheduler::{Schedule, Scheduler};
 use crate::sync::ResourceSignature;
@@ -701,6 +701,11 @@ impl ExecutionState {
 
     pub(crate) fn new_resource_signature(caller: &'static Location<'static>) -> ResourceSignature {
         ExecutionState::with(|s| s.current_mut().signature.new_resource(caller))
+    }
+
+    #[allow(unused)]
+    pub(crate) fn set_next_event_for_current(next_event: Event) {
+        ExecutionState::with(|s| s.current_mut().next_event = next_event);
     }
 
     pub(crate) fn get_storage<K: Into<StorageKey>, T: 'static>(&self, key: K) -> Option<&T> {

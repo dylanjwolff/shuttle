@@ -5,7 +5,7 @@ use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::labels::Labels;
 use crate::runtime::thread;
 use crate::runtime::thread::continuation::{ContinuationPool, PooledContinuation};
-use crate::sync::ResourceSignature;
+use crate::sync::{ResourceSignature, TypedResourceSignature};
 use crate::thread::LocalKey;
 use bitvec::prelude::*;
 use std::any::Any;
@@ -241,6 +241,19 @@ impl PartialEq for TaskSignature {
 
 impl Eq for TaskSignature {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(unused)]
+pub(crate) enum Event {
+    AtomicRead(TypedResourceSignature),
+    AtomicWrite(TypedResourceSignature),
+    AtomicReadWrite(TypedResourceSignature),
+    BatchSemaphoreAcq(TypedResourceSignature),
+    BatchSemaphoreRel(TypedResourceSignature),
+    Spawn(TaskSignature),
+    Join(TaskSignature),
+    Unknown,
+}
+
 /// A `Task` represents a user-level unit of concurrency. Each task has an `id` that is unique within
 /// the execution, and a `state` reflecting whether the task is runnable (enabled) or not.
 #[derive(Debug)]
@@ -259,6 +272,9 @@ pub struct Task {
     waker: Waker,
     // Remember whether the waker was invoked while we were running
     woken: bool,
+
+    #[allow(unused)]
+    pub(crate) next_event: Event,
 
     name: Option<String>,
 
@@ -330,6 +346,7 @@ impl Task {
             waiter: None,
             waker,
             woken: false,
+            next_event: Event::Unknown,
             detached: false,
             park_state: ParkState::default(),
             name,
