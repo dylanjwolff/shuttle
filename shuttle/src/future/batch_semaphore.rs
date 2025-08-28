@@ -360,6 +360,11 @@ impl BatchSemaphore {
     /// Closes the semaphore. This prevents the semaphore from issuing new
     /// permits and notifies all pending waiters.
     pub fn close(&self) {
+        // Close is called on drop, thus may be called during cleanup when switching is not allowed
+        if ExecutionState::with(|exec_state| !exec_state.in_cleanup()) {
+            thread::switch();
+        }
+
         self.init_object_id();
         let mut state = self.state.borrow_mut();
         if state.closed {
@@ -402,6 +407,8 @@ impl BatchSemaphore {
     /// If the semaphore is closed, returns `Err(TryAcquireError::Closed)`
     /// If there aren't enough permits, returns `Err(TryAcquireError::NoPermits)`
     pub fn try_acquire(&self, num_permits: usize) -> Result<(), TryAcquireError> {
+        thread::switch();
+
         self.init_object_id();
         let mut state = self.state.borrow_mut();
         let id = state.id.unwrap();
@@ -432,12 +439,6 @@ impl BatchSemaphore {
         }
 
         crate::annotations::record_semaphore_try_acquire(id, num_permits, res.is_ok());
-
-        // We context switch here whether we acquired any permits or not. If
-        // we have, this is to let other threads fail their `try_acquire`;
-        // if we have not, we yield so that the current thread can try again
-        // after other threads have worked.
-        thread::switch();
 
         res
     }
@@ -508,18 +509,24 @@ impl BatchSemaphore {
 
     /// Acquire the specified number of permits (async API)
     pub fn acquire(&self, num_permits: usize) -> Acquire<'_> {
+        // No switch here; switch should be triggered on polling future
         self.init_object_id();
         Acquire::new(self, num_permits)
     }
 
     /// Acquire the specified number of permits (blocking API)
     pub fn acquire_blocking(&self, num_permits: usize) -> Result<(), AcquireError> {
+        // No switch here; switch should be triggered on polling future
         self.init_object_id();
         crate::future::block_on(self.acquire(num_permits))
     }
 
     /// Release `num_permits` back to the Semaphore
     pub fn release(&self, num_permits: usize) {
+        if !ExecutionState::should_stop() {
+            thread::switch();
+        }
+
         self.init_object_id();
         if num_permits == 0 {
             return;
@@ -582,9 +589,6 @@ impl BatchSemaphore {
             }
         }
         drop(state);
-
-        // Releasing a semaphore is a yield point
-        thread::switch();
     }
 }
 
@@ -608,6 +612,7 @@ pub struct Acquire<'a> {
     waiter: Arc<Waiter>,
     semaphore: &'a BatchSemaphore,
     completed: bool, // Has the future completed yet?
+    has_polled: bool,
 }
 
 impl<'a> Acquire<'a> {
@@ -617,6 +622,7 @@ impl<'a> Acquire<'a> {
             waiter,
             semaphore,
             completed: false,
+            has_polled: false,
         }
     }
 }
@@ -626,6 +632,18 @@ impl Future for Acquire<'_> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         assert!(!self.completed);
+        let will_succeed = self.waiter.has_permits.load(Ordering::SeqCst)
+            || self.semaphore.is_closed()
+            || self.semaphore.available_permits() >= self.waiter.num_permits;
+
+        // If the acquire will succeed on the first try, we need to context switch once to allow the previous
+        // event to become visible. If we won't succeed, then there is no need because we will trigger a context
+        // switch anyways when we return Pending
+        if !self.has_polled && will_succeed {
+            thread::switch();
+        }
+        self.has_polled = true;
+
         if self.waiter.has_permits.load(Ordering::SeqCst) {
             assert!(!self.waiter.is_queued.load(Ordering::SeqCst));
             self.completed = true;
@@ -700,8 +718,6 @@ impl Future for Acquire<'_> {
                         // threads that can no longer succeed.
                         self.semaphore.reblock_if_unfair();
 
-                        // Yield so other threads can fail a `try_acquire`.
-                        thread::switch();
                         Poll::Ready(Ok(()))
                     }
                     Err(TryAcquireError::NoPermits) => {

@@ -223,6 +223,7 @@ fn dfs_does_not_reseed_across_executions() {
             }
         });
 
+        thread::yield_now(); // Everything below is not visible to Shuttle, so we need to give an opportunity to switch
         let mut rng = thread_rng();
         let x = rng.gen::<u64>();
         let mut set = pair.lock().unwrap();
