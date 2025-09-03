@@ -1,6 +1,6 @@
 use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::clock::VectorClock;
-use crate::runtime::task::TaskId;
+use crate::runtime::task::{TaskId, Event};
 use crate::runtime::thread;
 use crate::sync::TypedResourceSignature;
 use std::cell::RefCell;
@@ -105,7 +105,7 @@ impl Barrier {
         // If all tasks have already rendezvoused, we need to context switch once to allow the previous
         // event to become visible. Otherwise it will become visible when we block
         if !will_block {
-            thread::switch();
+            thread::switch(Event::BarrierWait(self.signature.clone()));
         }
         let mut state = self.state.borrow_mut();
         let my_epoch = state.epoch;
@@ -125,7 +125,7 @@ impl Barrier {
             trace!(waiters=?state.waiters, epoch=my_epoch, "blocked on barrier {:?}", self);
             drop(state);
             ExecutionState::with(|s| s.current_mut().block(false));
-            thread::switch();
+            thread::switch(Event::BarrierWait(self.signature.clone()));
         } else {
             trace!(waiters=?state.waiters, epoch=my_epoch, "releasing waiters on barrier {:?}", self);
 

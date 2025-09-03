@@ -1,7 +1,7 @@
 //! Shuttle's implementation of [`std::thread`].
 
 use crate::runtime::execution::ExecutionState;
-use crate::runtime::task::TaskId;
+use crate::runtime::task::{TaskId, Event};
 use crate::runtime::thread;
 use std::marker::PhantomData;
 use std::panic::Location;
@@ -43,7 +43,8 @@ impl Thread {
 
     /// Atomically makes the handle's token available if it is not already.
     pub fn unpark(&self) {
-        thread::switch();
+        let target_task_signature = ExecutionState::with(|s| s.get(self.id.task_id).signature.clone());
+        thread::switch(Event::Unpark(target_task_signature.clone()));
 
         ExecutionState::with(|s| {
             s.get_mut(self.id.task_id).unpark();
@@ -129,7 +130,7 @@ where
     if scope.num_running_threads.load(Ordering::Relaxed) != 0 {
         tracing::info!("thread blocked, waiting for completion of scoped threads");
         ExecutionState::with(|s| s.current_mut().block(false));
-        thread::switch();
+        thread::switch(Event::Park());
     }
 
     ret
@@ -213,7 +214,7 @@ where
     if ExecutionState::with(|s| s.exit_current_truncates_execution()) {
         // Exiting the last attached task can truncate the execution. To make the previous
         // event visible before truncation, we need a scheduling point before exiting.
-        thread::switch();
+        thread::switch(Event::Exit);
     }
     tracing::trace!("thread finished, dropping thread locals");
 
@@ -284,10 +285,11 @@ unsafe impl<T> Sync for JoinHandle<T> {}
 impl<T> JoinHandle<T> {
     /// Waits for the associated thread to finish.
     pub fn join(self) -> Result<T> {
+        let target_task_signature = ExecutionState::with(|s| s.get(self.task_id).signature.clone());
         // The switch before joining ensures that the preceding operation on the joiner is visible to be returned by the joinee
         let will_block = !ExecutionState::with(|state| state.get(self.task_id).finished());
         if !will_block {
-            thread::switch();
+            thread::switch(Event::Join(target_task_signature.clone()));
         }
 
         let should_block = ExecutionState::with(|state| {
@@ -302,7 +304,7 @@ impl<T> JoinHandle<T> {
         });
 
         if should_block {
-            thread::switch();
+            thread::switch(Event::Join(target_task_signature));
         }
 
         // Waiting thread inherits the clock of the finished thread
@@ -329,13 +331,13 @@ pub fn yield_now() {
     let waker = ExecutionState::with(|state| state.current().waker());
     waker.wake_by_ref();
     ExecutionState::request_yield();
-    thread::switch();
+    thread::switch(Event::Yield);
 }
 
 /// Puts the current thread to sleep for at least the specified amount of time.
 // Note that Shuttle does not model time, so this behaves just like a context switch.
 pub fn sleep(_dur: Duration) {
-    thread::switch();
+    thread::switch(Event::Sleep);
 }
 
 /// Get a handle to the thread that invokes it
@@ -353,7 +355,7 @@ pub fn current() -> Thread {
 
 /// Blocks unless or until the current thread's token is made available (may wake spuriously).
 pub fn park() {
-    thread::switch();
+    thread::switch(Event::Park());
     let switch = ExecutionState::with(|s| s.current_mut().park());
 
     // We only need to context switch if the park token was unavailable. If it was available, then
@@ -364,7 +366,7 @@ pub fn park() {
     // context would result in spurious wakeups triggering nearly every time.
     if switch {
         ExecutionState::request_yield();
-        thread::switch();
+        thread::switch(Event::Park());
     }
 }
 

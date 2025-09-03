@@ -249,7 +249,17 @@ pub(crate) enum Event {
     AtomicReadWrite(TypedResourceSignature),
     BatchSemaphoreAcq(TypedResourceSignature),
     BatchSemaphoreRel(TypedResourceSignature),
+    BarrierWait(TypedResourceSignature),
+    CondvarWait(TypedResourceSignature),
+    CondvarNotify(),
+    Park(),
+    Unpark(TaskSignature),
+    ChannelSend(TypedResourceSignature),
+    ChannelRecv(TypedResourceSignature),
     Spawn(TaskSignature),
+    Yield,
+    Sleep,
+    Exit,
     Join(TaskSignature),
     Unknown,
 }
@@ -421,7 +431,7 @@ impl Task {
                 let cx = &mut Context::from_waker(&waker);
                 while future.as_mut().poll(cx).is_pending() {
                     ExecutionState::with(|state| state.current_mut().sleep_unless_woken());
-                    thread::switch();
+                    thread::switch_keep_event();
                 }
             }),
             stack_size,

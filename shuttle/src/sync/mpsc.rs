@@ -2,7 +2,7 @@
 
 use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::clock::VectorClock;
-use crate::runtime::task::{TaskId, DEFAULT_INLINE_TASKS};
+use crate::runtime::task::{TaskId, DEFAULT_INLINE_TASKS, Event};
 use crate::runtime::thread;
 use crate::sync::TypedResourceSignature;
 use smallvec::SmallVec;
@@ -177,7 +177,7 @@ impl<T> Channel<T> {
         // prior to blocking, we also need to make the previous operation visible *before* this state-change
         // to ensure completeness
         if !can_block || !should_block || blocking_send_changes_state {
-            thread::switch();
+            thread::switch(Event::ChannelSend(self.signature.clone()));
             should_block = self.sender_must_block(); // After a switch channel state may have changed
         }
 
@@ -210,7 +210,7 @@ impl<T> Channel<T> {
             ExecutionState::with(|s| s.current_mut().block(false));
             drop(state);
 
-            thread::switch();
+            thread::switch(Event::ChannelSend(self.signature.clone()));
 
             state = self.state.borrow_mut();
             trace!(
@@ -297,7 +297,7 @@ impl<T> Channel<T> {
         // prior to blocking, we also need to make the previous operation visible *before* this state-change
         // to ensure completeness
         if !can_block || !should_block || blocking_recv_changes_state {
-            thread::switch();
+            thread::switch(Event::ChannelRecv(self.signature.clone()));
             should_block = self.receiver_must_block(); // After a switch channel state may have changed
         }
 
@@ -357,7 +357,7 @@ impl<T> Channel<T> {
             ExecutionState::with(|s| s.current_mut().block(false));
             drop(state);
 
-            thread::switch();
+            thread::switch(Event::ChannelRecv(self.signature.clone()));
 
             state = self.state.borrow_mut();
             trace!(

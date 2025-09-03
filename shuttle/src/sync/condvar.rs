@@ -1,7 +1,7 @@
 use crate::current;
 use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::clock::VectorClock;
-use crate::runtime::task::TaskId;
+use crate::runtime::task::{TaskId, Event};
 use crate::runtime::thread;
 use crate::sync::{MutexGuard, ResourceSignature, TypedResourceSignature};
 use assoc::AssocExt;
@@ -148,7 +148,7 @@ impl Condvar {
 
         // TODO: Condvar::wait should allow for spurious wakeups.
         ExecutionState::with(|s| s.current_mut().block(false));
-        thread::switch();
+        thread::switch(Event::CondvarWait(self.signature.clone()));
 
         // After the context switch, consume whichever signal that woke this thread
         let mut state = self.state.borrow_mut();
@@ -237,7 +237,7 @@ impl Condvar {
     /// If there is a blocked thread on this condition variable, then it will be woken up from its
     /// call to wait or wait_timeout. Calls to notify_one are not buffered in any way.
     pub fn notify_one(&self) {
-        thread::switch();
+        thread::switch(Event::CondvarNotify());
 
         let me = ExecutionState::me();
 
@@ -274,7 +274,7 @@ impl Condvar {
 
     /// Wakes up all blocked threads on this condvar.
     pub fn notify_all(&self) {
-        thread::switch();
+        thread::switch(Event::CondvarNotify());
 
         let me = ExecutionState::me();
 

@@ -5,6 +5,7 @@
 #![allow(deprecated)]
 
 use crate::runtime::execution::ExecutionState;
+use crate::runtime::task::Event;
 use generator::{Generator, Gn};
 use scoped_tls::scoped_thread_local;
 use std::cell::{Cell, RefCell};
@@ -277,7 +278,13 @@ unsafe impl Send for PooledContinuation {}
 /// is a visible operation, meaning that both scheduling points are necessary for complete
 /// exploration of all possible behaviors.
 #[track_caller]
-pub(crate) fn switch() {
+pub(crate) fn switch(event : Event) {
+    ExecutionState::with(|s| s.current_mut().next_event = event);
+    switch_keep_event()
+}
+
+#[track_caller]
+pub(crate) fn switch_keep_event() {
     crate::annotations::record_tick();
     debug!(
         "[{:?}] switch from {}",
@@ -288,6 +295,7 @@ pub(crate) fn switch() {
         let r = generator::yield_(ContinuationOutput::Yielded).unwrap();
         assert!(matches!(r, ContinuationInput::Resume));
     }
+    ExecutionState::with(|s| s.current_mut().next_event = Event::Unknown);
 }
 
 #[cfg(test)]

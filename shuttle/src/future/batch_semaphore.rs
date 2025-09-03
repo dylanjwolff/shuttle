@@ -1,7 +1,7 @@
 //! A counting semaphore supporting both async and sync operations.
 use crate::current;
 use crate::runtime::execution::ExecutionState;
-use crate::runtime::task::{clock::VectorClock, TaskId};
+use crate::runtime::task::{clock::VectorClock, TaskId, Event};
 use crate::runtime::thread;
 use crate::sync::{ResourceSignature, TypedResourceSignature};
 use std::cell::RefCell;
@@ -396,7 +396,7 @@ impl BatchSemaphore {
     pub fn close(&self) {
         // Close is called on drop, thus may be called during cleanup when switching is not allowed
         if ExecutionState::with(|exec_state| !exec_state.in_cleanup()) {
-            thread::switch();
+            thread::switch(Event::BatchSemaphoreRel(self.signature.clone()));
         }
 
         self.init_object_id();
@@ -441,7 +441,7 @@ impl BatchSemaphore {
     /// If the semaphore is closed, returns `Err(TryAcquireError::Closed)`
     /// If there aren't enough permits, returns `Err(TryAcquireError::NoPermits)`
     pub fn try_acquire(&self, num_permits: usize) -> Result<(), TryAcquireError> {
-        thread::switch();
+        thread::switch(Event::BatchSemaphoreAcq(self.signature.clone()));
 
         self.init_object_id();
         let mut state = self.state.borrow_mut();
@@ -558,7 +558,7 @@ impl BatchSemaphore {
     /// Release `num_permits` back to the Semaphore
     pub fn release(&self, num_permits: usize) {
         if !ExecutionState::should_stop() {
-            thread::switch();
+            thread::switch(Event::BatchSemaphoreRel(self.signature.clone()));
         }
 
         self.init_object_id();
@@ -679,7 +679,7 @@ impl Future for Acquire<'_> {
         // event to become visible. If we won't succeed, then there is no need because we will trigger a context
         // switch anyways when we return Pending
         if !self.has_polled && will_succeed {
-            thread::switch();
+            thread::switch(Event::BatchSemaphoreAcq(self.semaphore.signature.clone()));
         }
         self.has_polled = true;
 

@@ -473,7 +473,9 @@ impl ExecutionState {
     where
         F: Future<Output = ()> + 'static,
     {
-        thread::switch();
+
+        let signature = ExecutionState::with(|state| state.current_mut().signature.new_child(caller));
+        thread::switch(Event::Spawn(signature.clone()));
         let task_id = Self::with(|state| {
             let schedule_len = state.current_schedule.len();
             let parent_span_id = state.top_level_span.id();
@@ -496,7 +498,7 @@ impl ExecutionState {
                 schedule_len,
                 tag,
                 Some(state.current().id()),
-                state.current_mut().signature.new_child(caller),
+                signature,
             );
 
             state.tasks.push(task);
@@ -516,7 +518,8 @@ impl ExecutionState {
         mut initial_clock: Option<VectorClock>,
         caller: &'static Location<'static>,
     ) -> TaskId {
-        thread::switch();
+        let signature = ExecutionState::with(|state| state.current_mut().signature.new_child(caller));
+        thread::switch(Event::Spawn(signature.clone()));
         let task_id = Self::with(|state| {
             let parent_span_id = state.top_level_span.id();
             let task_id = TaskId(state.tasks.len());
@@ -545,7 +548,7 @@ impl ExecutionState {
                 schedule_len,
                 tag,
                 Some(state.current().id()),
-                state.current_mut().signature.new_child(caller),
+                signature,
             );
             state.tasks.push(task);
 
