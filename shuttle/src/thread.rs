@@ -216,6 +216,8 @@ where
         // event visible before truncation, we need a scheduling point before exiting.
         thread::switch(Event::Exit);
     }
+    let id = ExecutionState::me();
+    eprint!("{}", if id == TaskId::from(0) {'e'} else { 'E' });
     tracing::trace!("thread finished, dropping thread locals");
 
     // Run thread-local destructors before publishing the result, because

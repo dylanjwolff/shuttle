@@ -293,19 +293,22 @@ pub(crate) fn switch_keep_event() {
         debug!("Unknown event: {}", Location::caller());
     }
 
+    let s = match next_event {
+        Event::BatchSemaphoreAcq(_) => { debug!("Acquire!"); if id == TaskId::from(0) { "a" } else { eprint!("I"); "A" } },
+        Event::BatchSemaphoreRel(_) => { debug!("Release!"); if id == TaskId::from(0) {"r"} else { "R" } },
+        Event::Spawn(_) => { debug!("Spawn!"); if id == TaskId::from(0) {eprint!("i"); "s"} else { "S" } },
+        Event::Exit => { debug!("Main Exit"); ""},
+        _ => panic!("unknown op"),
+    };
     
+    debug!("start switch @ {}", Location::caller());
     if ExecutionState::maybe_yield() {
         let r = generator::yield_(ContinuationOutput::Yielded).unwrap();
         assert!(matches!(r, ContinuationInput::Resume));
     }
-    let s = match next_event {
-        Event::BatchSemaphoreAcq(_) => if id == TaskId::from(0) { 'a' } else { 'A' },
-        Event::BatchSemaphoreRel(_) => if id == TaskId::from(0) {'r'} else { 'R' },
-        Event::Spawn(_) => if id == TaskId::from(0) {'s'} else { 'S' },
-        Event::Exit => if id == TaskId::from(0) {'e'} else { 'E' },
-        _ => panic!("unknown op"),
-    };
+    
     eprint!("{}", s);
+    debug!("finish switch @ {}", Location::caller());
     ExecutionState::with(|s| s.current_mut().next_event = Event::Unknown);
 }
 

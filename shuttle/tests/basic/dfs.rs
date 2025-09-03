@@ -60,22 +60,21 @@ fn trivial_two_threads() {
 /// overlap (4 where T0 goes first and T1 blocks, and 4 symmetric ones where T1 goes first and
 /// T0 blocks). The following computation tree illustrates all interleavings.
 ///
-/// TODO: Why duplicate interleavings?
-/// sareAR
-/// sareAR
-/// sarAeR
-/// sarARe
-/// sareAR
-/// sarAeR
-/// sarARe
-/// sareAR
-/// sarAeR
-/// sarARe
-/// saAreAR
-/// saArAeR
-/// saArARe
-/// sAaRare
-/// sARare 
+/// isareIARE
+/// isarIeARE
+/// isarIAeRE
+/// isarIAREe
+/// isaIreARE
+/// isaIrAeRE
+/// isaIrAREe
+/// isIareARE
+/// isIarAeRE
+/// isIarAREe
+/// isIaAIreARE
+/// isIaAIrAeRE
+/// isIaAIrAREe
+/// isIAaREare
+/// isIAREare
 /// 
 /// ```
 /// digraph G {
