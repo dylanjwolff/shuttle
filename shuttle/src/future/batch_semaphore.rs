@@ -682,6 +682,7 @@ impl Future for Acquire<'_> {
             thread::switch(Event::BatchSemaphoreAcq(self.semaphore.signature.clone()));
         }
         self.has_polled = true;
+        ExecutionState::with(|s| s.current_mut().next_event = Event::BatchSemaphoreAcq(self.semaphore.signature.clone()));
 
         if self.waiter.has_permits.load(Ordering::SeqCst) {
             assert!(!self.waiter.is_queued.load(Ordering::SeqCst));

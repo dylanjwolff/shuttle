@@ -85,6 +85,7 @@ impl Execution {
 
         EXECUTION_STATE.set(&state, move || {
             // Spawn `f` as the first task
+            eprintln!("\nStart:");
             ExecutionState::spawn_main_thread(
                 Box::new(move || thread_fn(f, Default::default())),
                 config.stack_size,

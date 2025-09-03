@@ -4,6 +4,7 @@
 // TODO: upgrade to the new scoped generator API
 #![allow(deprecated)]
 
+use crate::current::TaskId;
 use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::Event;
 use generator::{Generator, Gn};
@@ -286,15 +287,25 @@ pub(crate) fn switch(event : Event) {
 #[track_caller]
 pub(crate) fn switch_keep_event() {
     crate::annotations::record_tick();
-    debug!(
-        "[{:?}] switch from {}",
-        ExecutionState::try_with(|s| s.try_current().map(|c| c.id())).flatten(),
-        Location::caller()
-    );
+    let next_event = ExecutionState::with(|s| s.current().next_event.clone());
+    let id = ExecutionState::me();
+    if Event::Unknown == next_event {
+        debug!("Unknown event: {}", Location::caller());
+    }
+
+    
     if ExecutionState::maybe_yield() {
         let r = generator::yield_(ContinuationOutput::Yielded).unwrap();
         assert!(matches!(r, ContinuationInput::Resume));
     }
+    let s = match next_event {
+        Event::BatchSemaphoreAcq(_) => if id == TaskId::from(0) { 'a' } else { 'A' },
+        Event::BatchSemaphoreRel(_) => if id == TaskId::from(0) {'r'} else { 'R' },
+        Event::Spawn(_) => if id == TaskId::from(0) {'s'} else { 'S' },
+        Event::Exit => if id == TaskId::from(0) {'e'} else { 'E' },
+        _ => panic!("unknown op"),
+    };
+    eprint!("{}", s);
     ExecutionState::with(|s| s.current_mut().next_event = Event::Unknown);
 }
 
