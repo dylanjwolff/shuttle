@@ -3,6 +3,10 @@ use crate::runtime::task::{Task, TaskId};
 use crate::runtime::thread::continuation::{ContinuationPool, CONTINUATION_POOL};
 use crate::scheduler::metrics::MetricsScheduler;
 use crate::scheduler::{Schedule, Scheduler};
+use crate::sync::time::{
+    constant_stepped::{ConstantSteppedTimeModel, ConstantTimeDistribution},
+    TimeModel,
+};
 use crate::Config;
 use std::cell::RefCell;
 use std::fmt;
@@ -52,18 +56,35 @@ impl Drop for ResetSpanOnDrop {
 /// function as many times as dictated by the scheduler; each execution has its scheduling decisions
 /// resolved by the scheduler, which can make different choices for each execution.
 #[derive(Debug)]
-pub struct Runner<S: ?Sized + Scheduler> {
+pub struct Runner<S: ?Sized + Scheduler, T: TimeModel> {
     scheduler: Rc<RefCell<MetricsScheduler<S>>>,
+    time_model: Rc<RefCell<T>>,
     config: Config,
 }
 
-impl<S: Scheduler + 'static> Runner<S> {
+impl<S: Scheduler + 'static> Runner<S, ConstantSteppedTimeModel> {
     /// Construct a new `Runner` that will use the given `Scheduler` to control the test.
     pub fn new(scheduler: S, config: Config) -> Self {
         let metrics_scheduler = MetricsScheduler::new(scheduler);
 
         Self {
             scheduler: Rc::new(RefCell::new(metrics_scheduler)),
+            time_model: Rc::new(RefCell::new(ConstantSteppedTimeModel::new(
+                ConstantTimeDistribution::new(std::time::Duration::from_micros(10)),
+            ))),
+            config,
+        }
+    }
+}
+
+impl<S: Scheduler + 'static, T: TimeModel + 'static> Runner<S, T> {
+    /// Construct a new `Runner` that will use the given `Scheduler` to control the test.
+    pub fn new_with_time_model(scheduler: S, time_model: T, config: Config) -> Self {
+        let metrics_scheduler = MetricsScheduler::new(scheduler);
+
+        Self {
+            scheduler: Rc::new(RefCell::new(metrics_scheduler)),
+            time_model: Rc::new(RefCell::new(time_model)),
             config,
         }
     }
@@ -96,7 +117,7 @@ impl<S: Scheduler + 'static> Runner<S> {
                     Some(s) => s,
                 };
 
-                let execution = Execution::new(self.scheduler.clone(), schedule);
+                let execution = Execution::new(self.scheduler.clone(), schedule, self.time_model.clone());
                 let f = Arc::clone(&f);
 
                 // This is a slightly lazy way to ensure that everything outside of the "execution" span gets
@@ -122,7 +143,6 @@ pub struct PortfolioRunner {
     stop_on_first_failure: bool,
     config: Config,
 }
-
 impl PortfolioRunner {
     /// Construct a new `PortfolioRunner` with no schedulers. If `stop_on_first_failure` is true,
     /// all schedulers will be terminated as soon as any fails; if false, they will keep running
@@ -134,7 +154,9 @@ impl PortfolioRunner {
             config,
         }
     }
+}
 
+impl PortfolioRunner {
     /// Add the given scheduler to the portfolio of schedulers to run the test with.
     pub fn add(&mut self, scheduler: impl Scheduler + Send + 'static) {
         self.schedulers.push(Box::new(scheduler));
@@ -209,7 +231,6 @@ impl PortfolioRunner {
         }
     }
 }
-
 impl fmt::Debug for PortfolioRunner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("PortfolioRunner")
