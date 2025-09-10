@@ -502,7 +502,7 @@ impl Task {
         }
     }
 
-    /// Potentially put this task to FuturePending after it was polled by the executor, unless someone has
+    /// Potentially put this task to sleep after it was polled by the executor, unless someone has
     /// called its waker first.
     ///
     /// A synchronous Task should never call this, because we want threads to be enabled-by-default
@@ -515,7 +515,7 @@ impl Task {
     }
 
     /// Remember that our waker has been called, and so we should not block the next time the
-    /// executor tries to make us pending.
+    /// executor tries to put us to sleep.
     pub(super) fn wake(&mut self, runnable_count: &mut usize) {
         self.woken = true;
         if self.state == TaskState::Sleeping {
