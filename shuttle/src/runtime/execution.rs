@@ -279,9 +279,7 @@ pub(crate) struct ExecutionState {
 
     // Persistent Vec used as a bump allocator for references to runnable tasks to avoid slow allocation
     // on each scheduling decision. Should not be used outside of the `schedule` function
-    runnable_tasks: Vec<*const Task>,
-    // Count of runnable tasks, updated in constant time when tasks block/unblock
-    pub(crate) runnable_count: usize,
+    pub(crate) runnable_tasks: Vec<*const Task>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -323,7 +321,6 @@ impl ExecutionState {
             has_cleaned_up: false,
             top_level_span: tracing::Span::current(),
             runnable_tasks: Vec::with_capacity(DEFAULT_INLINE_TASKS),
-            runnable_count: 0,
         }
     }
 
@@ -424,7 +421,7 @@ impl ExecutionState {
                 TaskSignature::new_parentless(caller),
             );
             state.tasks.push(task);
-            state.runnable_count += 1;
+            state.runnable_tasks.push(&state.tasks[task_id.0] as *const Task);
 
             task_id
         });
@@ -471,7 +468,7 @@ impl ExecutionState {
             );
 
             state.tasks.push(task);
-            state.runnable_count += 1;
+            state.runnable_tasks.push(&state.tasks[task_id.0] as *const Task);
 
             task_id
         });
@@ -519,7 +516,7 @@ impl ExecutionState {
                 state.current_mut().signature.new_child(caller),
             );
             state.tasks.push(task);
-            state.runnable_count += 1;
+            state.runnable_tasks.push(&state.tasks[task_id.0] as *const Task);
 
             task_id
         });
@@ -717,56 +714,56 @@ impl ExecutionState {
 
     /// Block the current task with split borrow
     pub(crate) fn block_current(&mut self, allow_spurious_wakeups: bool) {
-        let (task, runnable_count) = (
+        let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_count,
+            &mut self.runnable_tasks,
         );
-        task.block(allow_spurious_wakeups, runnable_count);
+        task.block(allow_spurious_wakeups, runnable_tasks);
     }
 
     /// Block a specific task with split borrow
     pub(crate) fn block_task(&mut self, task_id: TaskId, allow_spurious_wakeups: bool) {
-        let (task, runnable_count) = (&mut self.tasks[task_id.0], &mut self.runnable_count);
-        task.block(allow_spurious_wakeups, runnable_count);
+        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.runnable_tasks);
+        task.block(allow_spurious_wakeups, runnable_tasks);
     }
 
     /// Unblock a specific task with split borrow
     pub(crate) fn unblock_task(&mut self, task_id: TaskId) {
-        let (task, runnable_count) = (&mut self.tasks[task_id.0], &mut self.runnable_count);
-        task.unblock(runnable_count);
+        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.runnable_tasks);
+        task.unblock(runnable_tasks);
     }
 
     /// Finish the current task with split borrow
     pub(crate) fn finish_current(&mut self) {
-        let (task, runnable_count) = (
+        let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_count,
+            &mut self.runnable_tasks,
         );
-        task.finish(runnable_count);
+        task.finish(runnable_tasks);
     }
 
     /// Make current task pending unless woken with split borrow
     pub(crate) fn sleep_current_unless_woken(&mut self) {
-        let (task, runnable_count) = (
+        let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_count,
+            &mut self.runnable_tasks,
         );
-        task.sleep_unless_woken(runnable_count);
+        task.sleep_unless_woken(runnable_tasks);
     }
 
     /// Park the current task with split borrow
     pub(crate) fn park_current(&mut self) -> bool {
-        let (task, runnable_count) = (
+        let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_count,
+            &mut self.runnable_tasks,
         );
-        task.park(runnable_count)
+        task.park(runnable_tasks)
     }
 
     /// Unpark a specific task with split borrow
     pub(crate) fn unpark_task(&mut self, task_id: TaskId) {
-        let (task, runnable_count) = (&mut self.tasks[task_id.0], &mut self.runnable_count);
-        task.unpark(runnable_count);
+        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.runnable_tasks);
+        task.unpark(runnable_tasks);
     }
 
     /// Run the scheduler to choose the next task to run. `has_yielded` should be false if the
@@ -795,10 +792,12 @@ impl ExecutionState {
             _ => {}
         }
 
+        let runnable_count = self.runnable_tasks.len();
+        self.runnable_tasks.clear();
+
         let mut unfinished_attached = false;
         let mut all_runnable_detached = true;
         let mut any_runnable = false;
-        let mut actual_runnable_count = 0;
 
         for task in &self.tasks {
             unfinished_attached |= !task.finished() && !task.detached;
@@ -806,7 +805,6 @@ impl ExecutionState {
             any_runnable |= is_runnable;
 
             if is_runnable {
-                actual_runnable_count += 1;
                 all_runnable_detached &= task.detached;
                 self.runnable_tasks.push(task as *const Task);
             } else if task.can_spuriously_wakeup() {
@@ -821,7 +819,7 @@ impl ExecutionState {
 
         // Assert that our runnable count is correct
         assert_eq!(
-            self.runnable_count, actual_runnable_count,
+            runnable_count, self.runnable_tasks.len(),
             "runnable_count field is incorrect"
         );
 
