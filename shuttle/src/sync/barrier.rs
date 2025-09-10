@@ -109,7 +109,7 @@ impl Barrier {
 
         if state.waiters.len() < state.bound {
             trace!(waiters=?state.waiters, epoch=my_epoch, "blocked on barrier {:?}", self);
-            ExecutionState::with(|s| s.current_mut().block(false));
+            ExecutionState::with(|s| s.block_current(false));
         } else {
             trace!(waiters=?state.waiters, epoch=my_epoch, "releasing waiters on barrier {:?}", self);
 
@@ -135,10 +135,10 @@ impl Barrier {
             ExecutionState::with(|s| {
                 // `waiters` includes the current task.
                 for tid in waiters {
-                    let t = s.get_mut(tid);
+                    let (t, runnable_count) = (&mut s.tasks[tid.0], &mut s.runnable_count);
                     t.clock.increment(tid);
                     t.clock.update(&clock);
-                    t.unblock();
+                    t.unblock(runnable_count);
                 }
             });
         };

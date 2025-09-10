@@ -223,7 +223,7 @@ impl Execution {
             // Task finished
             Ok(true) => {
                 crate::annotations::record_task_terminated();
-                ExecutionState::with(|state| state.current_mut().finish());
+                ExecutionState::with(|state| state.finish_current());
             }
             // Task yielded
             Ok(false) => {}
@@ -251,7 +251,7 @@ impl Execution {
 pub(crate) struct ExecutionState {
     pub config: Config,
     // invariant: tasks are never removed from this list
-    tasks: SmallVec<[Task; DEFAULT_INLINE_TASKS]>,
+    pub(crate) tasks: SmallVec<[Task; DEFAULT_INLINE_TASKS]>,
     // invariant: if this transitions to Stopped or Finished, it can never change again
     current_task: ScheduledTask,
     // the task the scheduler has chosen to run next
@@ -280,6 +280,8 @@ pub(crate) struct ExecutionState {
     // Persistent Vec used as a bump allocator for references to runnable tasks to avoid slow allocation
     // on each scheduling decision. Should not be used outside of the `schedule` function
     runnable_tasks: Vec<*const Task>,
+    // Count of runnable tasks, updated in constant time when tasks block/unblock
+    pub(crate) runnable_count: usize,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -321,6 +323,7 @@ impl ExecutionState {
             has_cleaned_up: false,
             top_level_span: tracing::Span::current(),
             runnable_tasks: Vec::with_capacity(DEFAULT_INLINE_TASKS),
+            runnable_count: 0,
         }
     }
 
@@ -421,6 +424,7 @@ impl ExecutionState {
                 TaskSignature::new_parentless(caller),
             );
             state.tasks.push(task);
+            state.runnable_count += 1;
 
             task_id
         });
@@ -467,6 +471,7 @@ impl ExecutionState {
             );
 
             state.tasks.push(task);
+            state.runnable_count += 1;
 
             task_id
         });
@@ -514,6 +519,7 @@ impl ExecutionState {
                 state.current_mut().signature.new_child(caller),
             );
             state.tasks.push(task);
+            state.runnable_count += 1;
 
             task_id
         });
@@ -709,6 +715,60 @@ impl ExecutionState {
         self.current_schedule.len() - self.steps_reset_at >= max_steps
     }
 
+    /// Block the current task with split borrow
+    pub(crate) fn block_current(&mut self, allow_spurious_wakeups: bool) {
+        let (task, runnable_count) = (
+            &mut self.tasks[self.current_task.id().unwrap().0],
+            &mut self.runnable_count,
+        );
+        task.block(allow_spurious_wakeups, runnable_count);
+    }
+
+    /// Block a specific task with split borrow
+    pub(crate) fn block_task(&mut self, task_id: TaskId, allow_spurious_wakeups: bool) {
+        let (task, runnable_count) = (&mut self.tasks[task_id.0], &mut self.runnable_count);
+        task.block(allow_spurious_wakeups, runnable_count);
+    }
+
+    /// Unblock a specific task with split borrow
+    pub(crate) fn unblock_task(&mut self, task_id: TaskId) {
+        let (task, runnable_count) = (&mut self.tasks[task_id.0], &mut self.runnable_count);
+        task.unblock(runnable_count);
+    }
+
+    /// Finish the current task with split borrow
+    pub(crate) fn finish_current(&mut self) {
+        let (task, runnable_count) = (
+            &mut self.tasks[self.current_task.id().unwrap().0],
+            &mut self.runnable_count,
+        );
+        task.finish(runnable_count);
+    }
+
+    /// Make current task pending unless woken with split borrow
+    pub(crate) fn make_current_pending_unless_woken(&mut self) {
+        let (task, runnable_count) = (
+            &mut self.tasks[self.current_task.id().unwrap().0],
+            &mut self.runnable_count,
+        );
+        task.make_pending_unless_woken(runnable_count);
+    }
+
+    /// Park the current task with split borrow
+    pub(crate) fn park_current(&mut self) -> bool {
+        let (task, runnable_count) = (
+            &mut self.tasks[self.current_task.id().unwrap().0],
+            &mut self.runnable_count,
+        );
+        task.park(runnable_count)
+    }
+
+    /// Unpark a specific task with split borrow
+    pub(crate) fn unpark_task(&mut self, task_id: TaskId) {
+        let (task, runnable_count) = (&mut self.tasks[task_id.0], &mut self.runnable_count);
+        task.unpark(runnable_count);
+    }
+
     /// Run the scheduler to choose the next task to run. `has_yielded` should be false if the
     /// scheduler is being invoked from within a running task. If scheduling fails, returns an Err
     /// with a String describing the failure.
@@ -738,6 +798,7 @@ impl ExecutionState {
         let mut unfinished_attached = false;
         let mut all_runnable_detached = true;
         let mut any_runnable = false;
+        let mut actual_runnable_count = 0;
 
         for task in &self.tasks {
             unfinished_attached |= !task.finished() && !task.detached;
@@ -745,6 +806,7 @@ impl ExecutionState {
             any_runnable |= is_runnable;
 
             if is_runnable {
+                actual_runnable_count += 1;
                 all_runnable_detached &= task.detached;
                 self.runnable_tasks.push(task as *const Task);
             } else if task.can_spuriously_wakeup() {
@@ -756,6 +818,12 @@ impl ExecutionState {
                 self.runnable_tasks.push(task as *const Task);
             }
         }
+
+        // Assert that our runnable count is correct
+        assert_eq!(
+            self.runnable_count, actual_runnable_count,
+            "runnable_count field is incorrect"
+        );
 
         // We should finish execution when either
         // (1) There are no runnable tasks, or
@@ -804,11 +872,11 @@ impl ExecutionState {
         // If the task chosen by the scheduler is blocked, then it should be one that can be
         // spuriously woken up, and we need to unblock it here so that it can execute.
         if let Some(tid) = self.next_task.id() {
-            let task = self.get_mut(tid);
+            let task = self.get(tid);
             assert!(task.runnable() || task.blocked());
             if task.blocked() {
                 assert!(task.can_spuriously_wakeup());
-                task.unblock();
+                self.unblock_task(tid);
             }
         }
 

@@ -181,7 +181,7 @@ impl<T> Channel<T> {
                 me,
                 self,
             );
-            ExecutionState::with(|s| s.current_mut().block(false));
+            ExecutionState::with(|s| s.block_current(false));
             drop(state);
 
             thread::switch();
@@ -214,7 +214,7 @@ impl<T> Channel<T> {
         // The sender has just added a message to the channel, so unblock the first waiting receiver if any
         if let Some(&tid) = state.waiting_receivers.first() {
             ExecutionState::with(|s| {
-                s.get_mut(tid).unblock();
+                s.unblock_task(tid);
 
                 // When a sender successfully sends on a rendezvous channel, it knows that the receiver will perform
                 // the matching receive, so we need to update the sender's clock with the receiver's.
@@ -228,7 +228,7 @@ impl<T> Channel<T> {
         if let Some(&tid) = state.waiting_senders.first() {
             let bound = self.bound.expect("can't have waiting senders on an unbounded channel");
             if state.messages.len() < bound {
-                ExecutionState::with(|s| s.get_mut(tid).unblock());
+                ExecutionState::with(|s| s.unblock_task(tid));
             }
         }
 
@@ -274,7 +274,7 @@ impl<T> Channel<T> {
         if is_rendezvous && state.messages.is_empty() {
             if let Some(&tid) = state.waiting_senders.first() {
                 // Note: another receiver may have unblocked the sender already
-                ExecutionState::with(|s| s.get_mut(tid).unblock());
+                ExecutionState::with(|s| s.unblock_task(tid));
             } else if !can_block {
                 // Nobody to rendezvous with
                 return Err(TryRecvError::Empty);
@@ -312,7 +312,7 @@ impl<T> Channel<T> {
                 me,
                 self,
             );
-            ExecutionState::with(|s| s.current_mut().block(false));
+            ExecutionState::with(|s| s.block_current(false));
             drop(state);
 
             thread::switch();
@@ -346,14 +346,14 @@ impl<T> Channel<T> {
             // - this is a non-rendezvous bounded channel (bound > 0)
             // - this is a rendezvous channel and we have additional waiting receivers
             if bound > 0 || !state.waiting_receivers.is_empty() {
-                ExecutionState::with(|s| s.get_mut(tid).unblock());
+                ExecutionState::with(|s| s.unblock_task(tid));
             }
         }
         // Check and unblock the next the waiting receiver, if eligible
         // Note: this is a no-op for mpsc channels, since there can only be one receiver
         if let Some(&tid) = state.waiting_receivers.first() {
             if !state.messages.is_empty() {
-                ExecutionState::with(|s| s.get_mut(tid).unblock());
+                ExecutionState::with(|s| s.unblock_task(tid));
             }
         }
 
@@ -436,7 +436,7 @@ impl<T> Drop for Receiver<T> {
         if state.known_receivers == 0 {
             // Last receiver was dropped; wake up all senders
             for &tid in state.waiting_senders.iter() {
-                ExecutionState::with(|s| s.get_mut(tid).unblock());
+                ExecutionState::with(|s| s.unblock_task(tid));
             }
         }
     }
@@ -562,7 +562,7 @@ impl<T> Drop for Sender<T> {
         if state.known_senders == 0 {
             // Last sender was dropped; wake up all receivers
             for &tid in state.waiting_receivers.iter() {
-                ExecutionState::with(|s| s.get_mut(tid).unblock());
+                ExecutionState::with(|s| s.unblock_task(tid));
             }
         }
     }
@@ -622,7 +622,7 @@ impl<T> Drop for SyncSender<T> {
         if state.known_senders == 0 {
             // Last sender was dropped; wake up any receivers
             for &tid in state.waiting_receivers.iter() {
-                ExecutionState::with(|s| s.get_mut(tid).unblock());
+                ExecutionState::with(|s| s.unblock_task(tid));
             }
         }
     }

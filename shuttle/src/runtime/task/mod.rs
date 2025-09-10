@@ -392,7 +392,7 @@ impl Task {
                 let waker = ExecutionState::with(|state| state.current_mut().waker());
                 let cx = &mut Context::from_waker(&waker);
                 while future.as_mut().poll(cx).is_pending() {
-                    ExecutionState::with(|state| state.current_mut().make_pending_unless_woken());
+                    ExecutionState::with(|state| state.make_current_pending_unless_woken());
                     thread::switch();
                 }
             }),
@@ -452,27 +452,39 @@ impl Task {
     /// Block the current thread. If `allow_spurious_wakeups` is true, then the scheduler is
     /// permitted to spuriously wake up the thread (though it will still not count as a live thread
     /// for deadlock detection purposes for as long as it remains blocked).
-    pub(crate) fn block(&mut self, allow_spurious_wakeups: bool) {
+    pub(crate) fn block(&mut self, allow_spurious_wakeups: bool, runnable_count: &mut usize) {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
 
         assert!(self.state != TaskState::Finished);
+        let was_runnable = self.state == TaskState::Runnable;
         self.state = TaskState::Blocked { allow_spurious_wakeups };
+        if was_runnable {
+            *runnable_count -= 1;
+        }
     }
 
-    pub(crate) fn make_pending(&mut self) {
+    pub(crate) fn make_pending(&mut self, runnable_count: &mut usize) {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
 
         assert!(self.state != TaskState::Finished);
+        let was_runnable = self.state == TaskState::Runnable;
         self.state = TaskState::FuturePending;
+        if was_runnable {
+            *runnable_count -= 1;
+        }
     }
 
-    pub(crate) fn unblock(&mut self) {
+    pub(crate) fn unblock(&mut self, runnable_count: &mut usize) {
         // Note we don't assert the task is blocked here. For example, a task invoking its own waker
         // will not be blocked when this is called.
         assert!(self.state != TaskState::Finished);
+        let was_not_runnable = self.state != TaskState::Runnable;
         self.state = TaskState::Runnable;
+        if was_not_runnable {
+            *runnable_count += 1;
+        }
 
         // When a task gets unblocked, it's definitely no longer blocked in a call to `park`. This
         // is necessary to do here because a parked task could be spuriously woken up outside of the
@@ -481,9 +493,13 @@ impl Task {
         self.park_state.blocked_in_park = false;
     }
 
-    pub(crate) fn finish(&mut self) {
+    pub(crate) fn finish(&mut self, runnable_count: &mut usize) {
         assert!(self.state != TaskState::Finished);
+        let was_runnable = self.state == TaskState::Runnable;
         self.state = TaskState::Finished;
+        if was_runnable {
+            *runnable_count -= 1;
+        }
     }
 
     /// Potentially put this task to FuturePending after it was polled by the executor, unless someone has
@@ -491,19 +507,19 @@ impl Task {
     ///
     /// A synchronous Task should never call this, because we want threads to be enabled-by-default
     /// to avoid bugs where Shuttle incorrectly omits a potential execution.
-    pub(crate) fn make_pending_unless_woken(&mut self) {
+    pub(crate) fn make_pending_unless_woken(&mut self, runnable_count: &mut usize) {
         let was_woken = std::mem::replace(&mut self.woken, false);
         if !was_woken {
-            self.make_pending();
+            self.make_pending(runnable_count);
         }
     }
 
     /// Remember that our waker has been called, and so we should not block the next time the
     /// executor tries to make us pending.
-    pub(super) fn wake_pending(&mut self) {
+    pub(super) fn wake_pending(&mut self, runnable_count: &mut usize) {
         self.woken = true;
         if self.state == TaskState::FuturePending {
-            self.unblock();
+            self.unblock(runnable_count);
         }
     }
 
@@ -569,7 +585,7 @@ impl Task {
     /// documentation for [`std::thread::park`], which says that "it may also return spuriously,
     /// without consuming the token"). Returns true if the execution should switch to a different
     /// task (e.g., if the token was unavailable).
-    pub(crate) fn park(&mut self) -> bool {
+    pub(crate) fn park(&mut self, runnable_count: &mut usize) -> bool {
         assert!(
             !self.park_state.blocked_in_park,
             "task cannot park while already parked"
@@ -581,13 +597,13 @@ impl Task {
             false
         } else {
             self.park_state.blocked_in_park = true;
-            self.block(true);
+            self.block(true, runnable_count);
             true
         }
     }
 
     /// Make the task's park token available, and unblock the task if it was parked.
-    pub(crate) fn unpark(&mut self) {
+    pub(crate) fn unpark(&mut self, runnable_count: &mut usize) {
         if self.park_state.blocked_in_park {
             assert!(
                 self.blocked() && self.can_spuriously_wakeup(),
@@ -598,7 +614,7 @@ impl Task {
                 "token shouldn't be available for parked task"
             );
 
-            self.unblock();
+            self.unblock(runnable_count);
         } else {
             // If the thread isn't currently blocked in `park`, then make the token available. If
             // the token already is available, then this does nothing.
@@ -649,7 +665,7 @@ pub(crate) struct ParkState {
 /// A `TaskId` is a unique identifier for a task. `TaskId`s are never reused within a single
 /// execution.
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub struct TaskId(pub(super) usize);
+pub struct TaskId(pub(crate) usize);
 
 impl Debug for TaskId {
     // If the `TaskName` label is set, use that when generating the Debug string
