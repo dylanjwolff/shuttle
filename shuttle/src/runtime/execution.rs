@@ -132,7 +132,7 @@ impl Execution {
                                     t.name().unwrap_or_else(|| "<unknown>".to_string()),
                                     t.id(),
                                     if t.detached { ", detached" } else { "" },
-                                    if t.is_pending() { ", pending future" } else { "" },
+                                    if t.sleeping() { ", pending future" } else { "" },
                                     if backtrace_enabled() {
                                         format!("\nBacktrace:\n{:#?}\n", t.backtrace)
                                     } else {
@@ -746,12 +746,12 @@ impl ExecutionState {
     }
 
     /// Make current task pending unless woken with split borrow
-    pub(crate) fn make_current_pending_unless_woken(&mut self) {
+    pub(crate) fn sleep_current_unless_woken(&mut self) {
         let (task, runnable_count) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
             &mut self.runnable_count,
         );
-        task.make_pending_unless_woken(runnable_count);
+        task.sleep_unless_woken(runnable_count);
     }
 
     /// Park the current task with split borrow

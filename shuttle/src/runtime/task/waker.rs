@@ -39,7 +39,7 @@ unsafe fn raw_waker_wake(data: *const ()) {
         }
 
         let (task, runnable_count) = (&mut state.tasks[task_id.0], &mut state.runnable_count);
-        task.wake_pending(runnable_count);
+        task.wake(runnable_count);
     });
 }
 

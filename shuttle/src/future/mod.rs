@@ -246,7 +246,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
         match future.as_mut().poll(cx) {
             Poll::Ready(result) => break result,
             Poll::Pending => {
-                ExecutionState::with(|state| state.make_current_pending_unless_woken());
+                ExecutionState::with(|state| state.sleep_current_unless_woken());
             }
         }
 

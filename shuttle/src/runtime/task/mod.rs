@@ -392,7 +392,7 @@ impl Task {
                 let waker = ExecutionState::with(|state| state.current_mut().waker());
                 let cx = &mut Context::from_waker(&waker);
                 while future.as_mut().poll(cx).is_pending() {
-                    ExecutionState::with(|state| state.make_current_pending_unless_woken());
+                    ExecutionState::with(|state| state.sleep_current_unless_woken());
                     thread::switch();
                 }
             }),
@@ -428,8 +428,8 @@ impl Task {
         }
     }
 
-    pub(crate) fn is_pending(&self) -> bool {
-        self.state == TaskState::FuturePending
+    pub(crate) fn sleeping(&self) -> bool {
+        self.state == TaskState::Sleeping
     }
 
     pub(crate) fn finished(&self) -> bool {
@@ -464,13 +464,13 @@ impl Task {
         }
     }
 
-    pub(crate) fn make_pending(&mut self, runnable_count: &mut usize) {
+    pub(crate) fn sleep(&mut self, runnable_count: &mut usize) {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
 
         assert!(self.state != TaskState::Finished);
         let was_runnable = self.state == TaskState::Runnable;
-        self.state = TaskState::FuturePending;
+        self.state = TaskState::Sleeping;
         if was_runnable {
             *runnable_count -= 1;
         }
@@ -507,18 +507,18 @@ impl Task {
     ///
     /// A synchronous Task should never call this, because we want threads to be enabled-by-default
     /// to avoid bugs where Shuttle incorrectly omits a potential execution.
-    pub(crate) fn make_pending_unless_woken(&mut self, runnable_count: &mut usize) {
+    pub(crate) fn sleep_unless_woken(&mut self, runnable_count: &mut usize) {
         let was_woken = std::mem::replace(&mut self.woken, false);
         if !was_woken {
-            self.make_pending(runnable_count);
+            self.sleep(runnable_count);
         }
     }
 
     /// Remember that our waker has been called, and so we should not block the next time the
     /// executor tries to make us pending.
-    pub(super) fn wake_pending(&mut self, runnable_count: &mut usize) {
+    pub(super) fn wake(&mut self, runnable_count: &mut usize) {
         self.woken = true;
-        if self.state == TaskState::FuturePending {
+        if self.state == TaskState::Sleeping {
             self.unblock(runnable_count);
         }
     }
@@ -641,7 +641,7 @@ pub(crate) enum TaskState {
     /// Blocked in a synchronization operation
     Blocked { allow_spurious_wakeups: bool },
     /// A `Future` that returned `Pending` is waiting to be woken up
-    FuturePending,
+    Sleeping,
     /// Task has finished
     Finished,
 }
