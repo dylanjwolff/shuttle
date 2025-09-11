@@ -38,8 +38,12 @@ unsafe fn raw_waker_wake(data: *const ()) {
             return;
         }
 
-        let (task, runnable_tasks) = (&mut state.tasks[task_id.0], &mut state.schedulable_tasks);
-        task.wake(runnable_tasks);
+        let (task, runnable_tasks, num_runnable) = (
+            &mut state.tasks[task_id.0],
+            &mut state.schedulable_tasks,
+            &mut state.num_runnable,
+        );
+        task.wake(runnable_tasks, num_runnable);
     });
 }
 

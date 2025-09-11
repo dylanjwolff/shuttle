@@ -65,8 +65,9 @@ impl AbortHandle {
     pub fn abort(&self) {
         ExecutionState::try_with(|state| {
             if !state.is_finished() {
-                let task = state.get_mut(self.task_id);
-                task.abort();
+                let (task, num_unfinished_attached) =
+                    (&mut state.tasks[self.task_id.0], &mut state.num_unfinished_attached);
+                task.abort(num_unfinished_attached);
             }
         });
     }
@@ -113,8 +114,9 @@ impl<T> JoinHandle<T> {
     pub fn abort(&self) {
         ExecutionState::try_with(|state| {
             if !state.is_finished() {
-                let task = state.get_mut(self.task_id);
-                task.abort();
+                let (task, num_unfinished_attached) =
+                    (&mut state.tasks[self.task_id.0], &mut state.num_unfinished_attached);
+                task.abort(num_unfinished_attached);
             }
         });
     }

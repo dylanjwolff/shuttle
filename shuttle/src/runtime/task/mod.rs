@@ -18,7 +18,7 @@ use std::panic::Location;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Waker};
-use tracing::{error_span, event, field, Level, Span};
+use tracing::{error_span, event, field, trace, Level, Span};
 
 pub(crate) mod clock;
 pub(crate) mod labels;
@@ -436,14 +436,14 @@ impl Task {
         self.state == TaskState::Finished
     }
 
-    pub(crate) fn detach(&mut self, num_unfinished_attached : &mut u32) {
-        if !self.detached {
+    pub(crate) fn detach(&mut self, num_unfinished_attached: &mut u32) {
+        if !self.detached && !self.finished() {
             *num_unfinished_attached -= 1;
         }
         self.detached = true;
     }
 
-    pub(crate) fn abort(&mut self, num_unfinished_attached : &mut u32) {
+    pub(crate) fn abort(&mut self, num_unfinished_attached: &mut u32) {
         // TODO: Change into actually aborting
         self.detach(num_unfinished_attached);
     }
@@ -464,13 +464,20 @@ impl Task {
     /// Block the current thread. If `allow_spurious_wakeups` is true, then the scheduler is
     /// permitted to spuriously wake up the thread (though it will still not count as a live thread
     /// for deadlock detection purposes for as long as it remains blocked).
-    pub(crate) fn block(&mut self, allow_spurious_wakeups: bool, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
+    pub(crate) fn block(
+        &mut self,
+        allow_spurious_wakeups: bool,
+        runnable_tasks: &mut Vec<*const Task>,
+        num_runnable: &mut u32,
+    ) {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
 
         assert!(self.state != TaskState::Finished);
         let was_runnable = self.is_schedulable();
-        if self.state == TaskState::Runnable { *num_runnable -= 1 };
+        if self.state == TaskState::Runnable {
+            *num_runnable -= 1
+        };
         self.state = TaskState::Blocked { allow_spurious_wakeups };
         if was_runnable && !allow_spurious_wakeups {
             let pos = runnable_tasks
@@ -484,10 +491,13 @@ impl Task {
     pub(crate) fn sleep(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
+        trace!("sleep");
 
         assert!(self.state != TaskState::Finished);
         let was_runnable = self.is_schedulable();
-        if self.state == TaskState::Runnable { *num_runnable -= 1 };
+        if self.state == TaskState::Runnable {
+            *num_runnable -= 1
+        };
         self.state = TaskState::Sleeping;
         if was_runnable {
             let pos = runnable_tasks
@@ -503,7 +513,9 @@ impl Task {
         // will not be blocked when this is called.
         assert!(self.state != TaskState::Finished);
         let was_runnable = self.is_schedulable();
-        if self.state != TaskState::Runnable { *num_runnable += 1 };
+        if self.state != TaskState::Runnable {
+            *num_runnable += 1
+        };
         self.state = TaskState::Runnable;
         if !was_runnable {
             runnable_tasks.push(self as *const Task);
@@ -516,10 +528,18 @@ impl Task {
         self.park_state.blocked_in_park = false;
     }
 
-    pub(crate) fn finish(&mut self, runnable_tasks: &mut Vec<*const Task>, num_unfinished_attached : &mut u32, num_runnable: &mut u32) {
+    pub(crate) fn finish(
+        &mut self,
+        runnable_tasks: &mut Vec<*const Task>,
+        num_unfinished_attached: &mut u32,
+        num_runnable: &mut u32,
+    ) {
+        trace!("finish");
         assert!(self.state != TaskState::Finished);
         let was_runnable = self.is_schedulable();
-        if self.state == TaskState::Runnable { *num_runnable -= 1 };
+        if self.state == TaskState::Runnable {
+            *num_runnable -= 1
+        };
         if !self.detached {
             *num_unfinished_attached -= 1;
         }

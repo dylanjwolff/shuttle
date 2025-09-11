@@ -734,56 +734,73 @@ impl ExecutionState {
 
     /// Block the current task with split borrow
     pub(crate) fn block_current(&mut self, allow_spurious_wakeups: bool) {
-        let (task, runnable_tasks) = (
+        let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
             &mut self.schedulable_tasks,
+            &mut self.num_runnable,
         );
-        task.block(allow_spurious_wakeups, runnable_tasks);
+        task.block(allow_spurious_wakeups, runnable_tasks, num_runnable);
     }
 
     /// Block a specific task with split borrow
     pub(crate) fn block_task(&mut self, task_id: TaskId, allow_spurious_wakeups: bool) {
-        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.schedulable_tasks);
-        task.block(allow_spurious_wakeups, runnable_tasks);
+        let (task, runnable_tasks, num_runnable) = (
+            &mut self.tasks[task_id.0],
+            &mut self.schedulable_tasks,
+            &mut self.num_runnable,
+        );
+        task.block(allow_spurious_wakeups, runnable_tasks, num_runnable);
     }
 
     /// Unblock a specific task with split borrow
     pub(crate) fn unblock_task(&mut self, task_id: TaskId) {
-        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.schedulable_tasks);
-        task.unblock(runnable_tasks);
+        let (task, runnable_tasks, num_runnable) = (
+            &mut self.tasks[task_id.0],
+            &mut self.schedulable_tasks,
+            &mut self.num_runnable,
+        );
+        task.unblock(runnable_tasks, num_runnable);
     }
 
     /// Finish the current task with split borrow
     pub(crate) fn finish_current(&mut self) {
-        let (task, runnable_tasks) = (
+        let (task, runnable_tasks, num_unfinished_attached, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
             &mut self.schedulable_tasks,
+            &mut self.num_unfinished_attached,
+            &mut self.num_runnable,
         );
-        task.finish(runnable_tasks);
+        task.finish(runnable_tasks, num_unfinished_attached, num_runnable);
     }
 
     /// Make current task pending unless woken with split borrow
     pub(crate) fn sleep_current_unless_woken(&mut self) {
-        let (task, runnable_tasks) = (
+        let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
             &mut self.schedulable_tasks,
+            &mut self.num_runnable,
         );
-        task.sleep_unless_woken(runnable_tasks);
+        task.sleep_unless_woken(runnable_tasks, num_runnable);
     }
 
     /// Park the current task with split borrow
     pub(crate) fn park_current(&mut self) -> bool {
-        let (task, runnable_tasks) = (
+        let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
             &mut self.schedulable_tasks,
+            &mut self.num_runnable,
         );
-        task.park(runnable_tasks)
+        task.park(runnable_tasks, num_runnable)
     }
 
     /// Unpark a specific task with split borrow
     pub(crate) fn unpark_task(&mut self, task_id: TaskId) {
-        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.schedulable_tasks);
-        task.unpark(runnable_tasks);
+        let (task, runnable_tasks, num_runnable) = (
+            &mut self.tasks[task_id.0],
+            &mut self.schedulable_tasks,
+            &mut self.num_runnable,
+        );
+        task.unpark(runnable_tasks, num_runnable);
     }
 
     /// Run the scheduler to choose the next task to run. `has_yielded` should be false if the
@@ -795,8 +812,6 @@ impl ExecutionState {
         if self.next_task != ScheduledTask::None {
             return Ok(());
         }
-
-        trace!("begin schedule");
 
         self.context_switches += 1;
 
@@ -851,6 +866,17 @@ impl ExecutionState {
             self.runnable_tasks_correct.len(),
             "runnable_count field is incorrect"
         );
+
+        trace!(
+            "unfinished_attached: {} {}",
+            unfinished_attached,
+            self.num_unfinished_attached
+        );
+        assert!(unfinished_attached || self.num_unfinished_attached == 0);
+        assert!(!unfinished_attached || self.num_unfinished_attached != 0);
+        trace!("any_runnable: {} {}", any_runnable, self.num_runnable);
+        assert!(any_runnable || self.num_runnable == 0);
+        assert!(!any_runnable || self.num_runnable != 0);
 
         // We should finish execution when either
         // (1) There are no runnable tasks, or
