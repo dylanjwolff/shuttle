@@ -280,6 +280,7 @@ pub(crate) struct ExecutionState {
     // Persistent Vec used as a bump allocator for references to runnable tasks to avoid slow allocation
     // on each scheduling decision. Should not be used outside of the `schedule` function
     pub(crate) runnable_tasks: Vec<*const Task>,
+    pub(crate) runnable_tasks_correct: Vec<*const Task>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -321,6 +322,7 @@ impl ExecutionState {
             has_cleaned_up: false,
             top_level_span: tracing::Span::current(),
             runnable_tasks: Vec::with_capacity(DEFAULT_INLINE_TASKS),
+            runnable_tasks_correct: Vec::with_capacity(DEFAULT_INLINE_TASKS),
         }
     }
 
@@ -776,6 +778,8 @@ impl ExecutionState {
             return Ok(());
         }
 
+        trace!("begin schedule");
+
         self.context_switches += 1;
 
         match self.config.max_steps {
@@ -792,9 +796,6 @@ impl ExecutionState {
             _ => {}
         }
 
-        let runnable_count = self.runnable_tasks.len();
-        self.runnable_tasks.clear();
-
         let mut unfinished_attached = false;
         let mut all_runnable_detached = true;
         let mut any_runnable = false;
@@ -806,20 +807,28 @@ impl ExecutionState {
 
             if is_runnable {
                 all_runnable_detached &= task.detached;
-                self.runnable_tasks.push(task as *const Task);
+                self.runnable_tasks_correct.push(task as *const Task);
             } else if task.can_spuriously_wakeup() {
                 // Some blocked tasks can be woken up spuriously, even though the condition the task is
                 // blocked on hasn't happened yet. We'll add such tasks to the list of runnable tasks, but
                 // they won't contribute to the check on `any_runnable`; if the only runnable tasks
                 // are ones that are waiting for a potential spurious wakeup, it should still be treated as
                 // a deadlock since there's no guarantee that spurious wakeups will ever occur.
-                self.runnable_tasks.push(task as *const Task);
+                self.runnable_tasks_correct.push(task as *const Task);
             }
         }
 
-        // Assert that our runnable count is correct
+        if self.runnable_tasks.len() != self.runnable_tasks_correct.len() {
+            trace!("mismatch schedule");
+
+            let task_refs_correct = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks_correct) };
+            let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks) };
+            trace!("{:?}", task_refs);
+            trace!("-------------------------\n\n");
+            trace!("{:?}", task_refs_correct);
+        }
         assert_eq!(
-            runnable_count, self.runnable_tasks.len(),
+            self.runnable_tasks.len(), self.runnable_tasks_correct.len(),
             "runnable_count field is incorrect"
         );
 
@@ -838,10 +847,10 @@ impl ExecutionState {
         // Cast the slice of raw pointers to a slice of references in place to provide schedulers with a safe API
         //
         // SAFETY: This is safe because the tasks themselves are only being accessed through this shared reference by the
-        // schedulers, and all references are always cleared from the runnable_tasks Vec at the end of this function.
+        // schedulers, and all references are always cleared from the runnable_tasks_correct Vec at the end of this function.
         // The transmute itself is safe because *const and & have the same layout, and the pointer is created from a
         // reference earlier in this function.
-        let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks) };
+        let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks_correct) };
 
         self.next_task = self
             .scheduler
@@ -878,8 +887,8 @@ impl ExecutionState {
             }
         }
 
-        // Retains the capacity of `runnable_tasks` for future calls of `schedule`
-        self.runnable_tasks.clear();
+        // Retains the capacity of `runnable_tasks_correct` for future calls of `schedule`
+        self.runnable_tasks_correct.clear();
 
         Ok(())
     }
