@@ -135,7 +135,7 @@ impl Barrier {
             ExecutionState::with(|s| {
                 // `waiters` includes the current task.
                 for tid in waiters {
-                    let (t, runnable_tasks) = (&mut s.tasks[tid.0], &mut s.runnable_tasks);
+                    let (t, runnable_tasks) = (&mut s.tasks[tid.0], &mut s.schedulable_tasks);
                     t.clock.increment(tid);
                     t.clock.update(&clock);
                     t.unblock(runnable_tasks);

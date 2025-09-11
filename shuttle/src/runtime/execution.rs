@@ -280,8 +280,10 @@ pub(crate) struct ExecutionState {
 
     // Persistent Vec used as a bump allocator for references to runnable tasks to avoid slow allocation
     // on each scheduling decision. Should not be used outside of the `schedule` function
-    pub(crate) runnable_tasks: Vec<*const Task>,
+    pub(crate) schedulable_tasks: Vec<*const Task>,
     pub(crate) runnable_tasks_correct: Vec<*const Task>,
+    pub(crate) num_unfinished_attached: u32,
+    pub(crate) num_runnable: u32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -322,8 +324,10 @@ impl ExecutionState {
             #[cfg(debug_assertions)]
             has_cleaned_up: false,
             top_level_span: tracing::Span::current(),
-            runnable_tasks: Vec::with_capacity(DEFAULT_INLINE_TASKS),
+            schedulable_tasks: Vec::with_capacity(DEFAULT_INLINE_TASKS),
             runnable_tasks_correct: Vec::with_capacity(DEFAULT_INLINE_TASKS),
+            num_unfinished_attached: 0,
+            num_runnable: 0,
         }
     }
 
@@ -425,8 +429,10 @@ impl ExecutionState {
             );
             state.tasks.push(Box::pin(task));
             state
-                .runnable_tasks
+                .schedulable_tasks
                 .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.num_unfinished_attached += 1;
+            state.num_runnable += 1;
 
             task_id
         });
@@ -474,8 +480,10 @@ impl ExecutionState {
 
             state.tasks.push(Box::pin(task));
             state
-                .runnable_tasks
+                .schedulable_tasks
                 .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.num_unfinished_attached += 1;
+            state.num_runnable += 1;
 
             task_id
         });
@@ -524,8 +532,10 @@ impl ExecutionState {
             );
             state.tasks.push(Box::pin(task));
             state
-                .runnable_tasks
+                .schedulable_tasks
                 .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.num_unfinished_attached += 1;
+            state.num_runnable += 1;
 
             task_id
         });
@@ -726,20 +736,20 @@ impl ExecutionState {
     pub(crate) fn block_current(&mut self, allow_spurious_wakeups: bool) {
         let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_tasks,
+            &mut self.schedulable_tasks,
         );
         task.block(allow_spurious_wakeups, runnable_tasks);
     }
 
     /// Block a specific task with split borrow
     pub(crate) fn block_task(&mut self, task_id: TaskId, allow_spurious_wakeups: bool) {
-        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.runnable_tasks);
+        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.schedulable_tasks);
         task.block(allow_spurious_wakeups, runnable_tasks);
     }
 
     /// Unblock a specific task with split borrow
     pub(crate) fn unblock_task(&mut self, task_id: TaskId) {
-        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.runnable_tasks);
+        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.schedulable_tasks);
         task.unblock(runnable_tasks);
     }
 
@@ -747,7 +757,7 @@ impl ExecutionState {
     pub(crate) fn finish_current(&mut self) {
         let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_tasks,
+            &mut self.schedulable_tasks,
         );
         task.finish(runnable_tasks);
     }
@@ -756,7 +766,7 @@ impl ExecutionState {
     pub(crate) fn sleep_current_unless_woken(&mut self) {
         let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_tasks,
+            &mut self.schedulable_tasks,
         );
         task.sleep_unless_woken(runnable_tasks);
     }
@@ -765,14 +775,14 @@ impl ExecutionState {
     pub(crate) fn park_current(&mut self) -> bool {
         let (task, runnable_tasks) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
-            &mut self.runnable_tasks,
+            &mut self.schedulable_tasks,
         );
         task.park(runnable_tasks)
     }
 
     /// Unpark a specific task with split borrow
     pub(crate) fn unpark_task(&mut self, task_id: TaskId) {
-        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.runnable_tasks);
+        let (task, runnable_tasks) = (&mut self.tasks[task_id.0], &mut self.schedulable_tasks);
         task.unpark(runnable_tasks);
     }
 
@@ -826,18 +836,18 @@ impl ExecutionState {
             }
         }
 
-        if self.runnable_tasks.len() != self.runnable_tasks_correct.len() {
+        if self.schedulable_tasks.len() != self.runnable_tasks_correct.len() {
             trace!("mismatch schedule");
 
             let task_refs_correct =
                 unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks_correct) };
-            let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks) };
+            let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.schedulable_tasks) };
             trace!("{:?}", task_refs);
             trace!("-------------------------\n\n");
             trace!("{:?}", task_refs_correct);
         }
         assert_eq!(
-            self.runnable_tasks.len(),
+            self.schedulable_tasks.len(),
             self.runnable_tasks_correct.len(),
             "runnable_count field is incorrect"
         );
