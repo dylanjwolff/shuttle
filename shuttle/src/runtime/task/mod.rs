@@ -18,7 +18,7 @@ use std::panic::Location;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Waker};
-use tracing::{error_span, event, field, trace, Level, Span};
+use tracing::{error_span, event, field, Level, Span};
 
 pub(crate) mod clock;
 pub(crate) mod labels;
@@ -449,6 +449,15 @@ impl Task {
         self.waker.clone()
     }
 
+    fn is_schedulable(&self) -> bool {
+        match self.state {
+            TaskState::Runnable => true,
+            TaskState::Blocked { allow_spurious_wakeups } => allow_spurious_wakeups,
+            TaskState::Sleeping => false,
+            TaskState::Finished => false,
+        }
+    }
+
     /// Block the current thread. If `allow_spurious_wakeups` is true, then the scheduler is
     /// permitted to spuriously wake up the thread (though it will still not count as a live thread
     /// for deadlock detection purposes for as long as it remains blocked).
@@ -457,20 +466,14 @@ impl Task {
         self.backtrace = Backtrace::capture();
 
         assert!(self.state != TaskState::Finished);
-        let was_runnable = match self.state {
-            TaskState::Runnable => true,
-            TaskState::Blocked { allow_spurious_wakeups } => allow_spurious_wakeups,
-            TaskState::Sleeping => false,
-            TaskState::Finished => unreachable!(),
-        };
+        let was_runnable = self.is_schedulable();
         self.state = TaskState::Blocked { allow_spurious_wakeups };
         if was_runnable && !allow_spurious_wakeups {
-            if let Some(pos) = runnable_tasks.iter().position(|&t| unsafe { trace!("ID {:?}", (*t).id()); (*t).id() == self.id }) {
-                runnable_tasks.swap_remove(pos);
-            } else {
-                panic!("ID {:?} not found", self.id);
-            }
-            trace!("DONE ID");
+            let pos = runnable_tasks
+                .iter()
+                .position(|&t| unsafe { (*t).id() == self.id })
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
         }
     }
 
@@ -479,19 +482,14 @@ impl Task {
         self.backtrace = Backtrace::capture();
 
         assert!(self.state != TaskState::Finished);
-        let was_runnable = match self.state {
-            TaskState::Runnable => true,
-            TaskState::Blocked { allow_spurious_wakeups } => allow_spurious_wakeups,
-            TaskState::Sleeping => false,
-            TaskState::Finished => unreachable!(),
-        };
+        let was_runnable = self.is_schedulable();
         self.state = TaskState::Sleeping;
         if was_runnable {
-            if let Some(pos) = runnable_tasks.iter().position(|&t| unsafe { (*t).id() == self.id }) {
-                runnable_tasks.swap_remove(pos);
-            } else {
-                panic!("ID {:?} not found", self.id);
-            }
+            let pos = runnable_tasks
+                .iter()
+                .position(|&t| unsafe { (*t).id() == self.id })
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
         }
     }
 
@@ -499,13 +497,7 @@ impl Task {
         // Note we don't assert the task is blocked here. For example, a task invoking its own waker
         // will not be blocked when this is called.
         assert!(self.state != TaskState::Finished);
-        let was_runnable = match self.state {
-            TaskState::Runnable => true,
-            TaskState::Blocked { allow_spurious_wakeups } => allow_spurious_wakeups,
-            TaskState::Sleeping => false,
-            TaskState::Finished => unreachable!(),
-        };
-
+        let was_runnable = self.is_schedulable();
         self.state = TaskState::Runnable;
         if !was_runnable {
             runnable_tasks.push(self as *const Task);
@@ -520,19 +512,14 @@ impl Task {
 
     pub(crate) fn finish(&mut self, runnable_tasks: &mut Vec<*const Task>) {
         assert!(self.state != TaskState::Finished);
-        let was_runnable = match self.state {
-            TaskState::Runnable => true,
-            TaskState::Blocked { allow_spurious_wakeups } => allow_spurious_wakeups,
-            TaskState::Sleeping => false,
-            TaskState::Finished => unreachable!(),
-        };
+        let was_runnable = self.is_schedulable();
         self.state = TaskState::Finished;
         if was_runnable {
-            if let Some(pos) = runnable_tasks.iter().position(|&t| unsafe { (*t).id() == self.id }) {
-                runnable_tasks.swap_remove(pos);
-            } else {
-                panic!("ID {:?} not found", self.id);
-            }
+            let pos = runnable_tasks
+                .iter()
+                .position(|&t| unsafe { (*t).id() == self.id })
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
         }
     }
 

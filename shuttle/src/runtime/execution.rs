@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::panic::{self, Location};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{trace, Span};
@@ -251,7 +252,7 @@ impl Execution {
 pub(crate) struct ExecutionState {
     pub config: Config,
     // invariant: tasks are never removed from this list
-    pub(crate) tasks: SmallVec<[Task; DEFAULT_INLINE_TASKS]>,
+    pub(crate) tasks: SmallVec<[Pin<Box<Task>>; DEFAULT_INLINE_TASKS]>,
     // invariant: if this transitions to Stopped or Finished, it can never change again
     current_task: ScheduledTask,
     // the task the scheduler has chosen to run next
@@ -422,8 +423,10 @@ impl ExecutionState {
                 None,
                 TaskSignature::new_parentless(caller),
             );
-            state.tasks.push(task);
-            state.runnable_tasks.push(&state.tasks[task_id.0] as *const Task);
+            state.tasks.push(Box::pin(task));
+            state
+                .runnable_tasks
+                .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
 
             task_id
         });
@@ -469,8 +472,10 @@ impl ExecutionState {
                 state.current_mut().signature.new_child(caller),
             );
 
-            state.tasks.push(task);
-            state.runnable_tasks.push(&state.tasks[task_id.0] as *const Task);
+            state.tasks.push(Box::pin(task));
+            state
+                .runnable_tasks
+                .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
 
             task_id
         });
@@ -517,8 +522,10 @@ impl ExecutionState {
                 Some(state.current().id()),
                 state.current_mut().signature.new_child(caller),
             );
-            state.tasks.push(task);
-            state.runnable_tasks.push(&state.tasks[task_id.0] as *const Task);
+            state.tasks.push(Box::pin(task));
+            state
+                .runnable_tasks
+                .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
 
             task_id
         });
@@ -544,6 +551,7 @@ impl ExecutionState {
                 final_state == ScheduledTask::Stopped || task.finished() || task.detached,
                 "execution finished but task is not"
             );
+            let task = Pin::into_inner(task);
             Rc::try_unwrap(task.continuation)
                 .map_err(|_| ())
                 .expect("couldn't cleanup a future");
@@ -659,7 +667,7 @@ impl ExecutionState {
     }
 
     pub(crate) fn try_get(&self, id: TaskId) -> Option<&Task> {
-        self.tasks.get(id.0)
+        self.tasks.get(id.0).map(|t| t.as_ref().get_ref())
     }
 
     pub(crate) fn in_cleanup(&self) -> bool {
@@ -807,28 +815,30 @@ impl ExecutionState {
 
             if is_runnable {
                 all_runnable_detached &= task.detached;
-                self.runnable_tasks_correct.push(task as *const Task);
+                self.runnable_tasks_correct.push(task.as_ref().get_ref() as *const Task);
             } else if task.can_spuriously_wakeup() {
                 // Some blocked tasks can be woken up spuriously, even though the condition the task is
                 // blocked on hasn't happened yet. We'll add such tasks to the list of runnable tasks, but
                 // they won't contribute to the check on `any_runnable`; if the only runnable tasks
                 // are ones that are waiting for a potential spurious wakeup, it should still be treated as
                 // a deadlock since there's no guarantee that spurious wakeups will ever occur.
-                self.runnable_tasks_correct.push(task as *const Task);
+                self.runnable_tasks_correct.push(task.as_ref().get_ref() as *const Task);
             }
         }
 
         if self.runnable_tasks.len() != self.runnable_tasks_correct.len() {
             trace!("mismatch schedule");
 
-            let task_refs_correct = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks_correct) };
+            let task_refs_correct =
+                unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks_correct) };
             let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks) };
             trace!("{:?}", task_refs);
             trace!("-------------------------\n\n");
             trace!("{:?}", task_refs_correct);
         }
         assert_eq!(
-            self.runnable_tasks.len(), self.runnable_tasks_correct.len(),
+            self.runnable_tasks.len(),
+            self.runnable_tasks_correct.len(),
             "runnable_count field is incorrect"
         );
 
