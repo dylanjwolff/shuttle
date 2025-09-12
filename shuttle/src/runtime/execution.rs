@@ -803,34 +803,8 @@ impl ExecutionState {
         task.unpark(runnable_tasks, num_runnable);
     }
 
-    /// Run the scheduler to choose the next task to run. `has_yielded` should be false if the
-    /// scheduler is being invoked from within a running task. If scheduling fails, returns an Err
-    /// with a String describing the failure.
-    fn schedule(&mut self) -> Result<(), String> {
-        // Don't schedule twice. If `maybe_yield` ran the scheduler, we don't want to run it
-        // again at the top of `step`.
-        if self.next_task != ScheduledTask::None {
-            return Ok(());
-        }
-
-        self.context_switches += 1;
-
-        match self.config.max_steps {
-            MaxSteps::FailAfter(max_steps) if self.is_step_bound_exceeded(max_steps) => {
-                let msg = format!(
-                    "exceeded max_steps bound {max_steps}. this might be caused by an unfair schedule (e.g., a spin loop)?"
-                );
-                return Err(msg);
-            }
-            MaxSteps::ContinueAfter(max_steps) if self.is_step_bound_exceeded(max_steps) => {
-                self.next_task = ScheduledTask::Stopped;
-                return Ok(());
-            }
-            _ => {}
-        }
-
+    fn debug_runnable_ok(&mut self) -> bool {
         let mut unfinished_attached = false;
-        let mut all_runnable_detached = true;
         let mut any_runnable = false;
 
         for task in &self.tasks {
@@ -839,7 +813,6 @@ impl ExecutionState {
             any_runnable |= is_runnable;
 
             if is_runnable {
-                all_runnable_detached &= task.detached;
                 self.runnable_tasks_correct.push(task.as_ref().get_ref() as *const Task);
             } else if task.can_spuriously_wakeup() {
                 // Some blocked tasks can be woken up spuriously, even though the condition the task is
@@ -878,12 +851,48 @@ impl ExecutionState {
         assert!(any_runnable || self.num_runnable == 0);
         assert!(!any_runnable || self.num_runnable != 0);
 
+
+
+        // Retains the capacity of `runnable_tasks_correct` for future calls of `schedule`
+        self.runnable_tasks_correct.clear();
+
+        return true;
+    }
+
+    /// Run the scheduler to choose the next task to run. `has_yielded` should be false if the
+    /// scheduler is being invoked from within a running task. If scheduling fails, returns an Err
+    /// with a String describing the failure.
+    fn schedule(&mut self) -> Result<(), String> {
+        // Don't schedule twice. If `maybe_yield` ran the scheduler, we don't want to run it
+        // again at the top of `step`.
+        if self.next_task != ScheduledTask::None {
+            return Ok(());
+        }
+
+        self.context_switches += 1;
+
+        match self.config.max_steps {
+            MaxSteps::FailAfter(max_steps) if self.is_step_bound_exceeded(max_steps) => {
+                let msg = format!(
+                    "exceeded max_steps bound {max_steps}. this might be caused by an unfair schedule (e.g., a spin loop)?"
+                );
+                return Err(msg);
+            }
+            MaxSteps::ContinueAfter(max_steps) if self.is_step_bound_exceeded(max_steps) => {
+                self.next_task = ScheduledTask::Stopped;
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        debug_assert!(self.debug_runnable_ok());
+
         // We should finish execution when either
         // (1) There are no runnable tasks, or
         // (2) All runnable tasks have been detached AND there are no unfinished attached tasks
         // If there are some unfinished attached tasks and all runnable tasks are detached, we must
         // run some detached task to give them a chance to unblock some unfinished attached task.
-        if !any_runnable || (!unfinished_attached && all_runnable_detached) {
+        if !self.num_runnable > 0 || self.num_unfinished_attached == 0 {
             self.next_task = ScheduledTask::Finished;
             return Ok(());
         }
@@ -896,7 +905,7 @@ impl ExecutionState {
         // schedulers, and all references are always cleared from the runnable_tasks_correct Vec at the end of this function.
         // The transmute itself is safe because *const and & have the same layout, and the pointer is created from a
         // reference earlier in this function.
-        let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks_correct) };
+        let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.schedulable_tasks) };
 
         self.next_task = self
             .scheduler
@@ -932,9 +941,6 @@ impl ExecutionState {
                 self.unblock_task(tid);
             }
         }
-
-        // Retains the capacity of `runnable_tasks_correct` for future calls of `schedule`
-        self.runnable_tasks_correct.clear();
 
         Ok(())
     }
