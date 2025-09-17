@@ -67,11 +67,15 @@ impl Scheduler for DfsScheduler {
     // TODO should we respect `is_yielding` by not allowing `current` to be scheduled next? That
     // TODO would be unsound but perhaps useful for validating some code
     fn next_task(&mut self, runnable: &[&Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+        // Sort runnable tasks by TaskId to ensure stable ordering for DFS exploration
+        // This is necessary because swap_remove operations can change the order of tasks in the vector
+        let mut sorted_runnable: Vec<&Task> = runnable.to_vec();
+        sorted_runnable.sort_unstable_by_key(|task| task.id());
         let next = if self.steps >= self.levels.len() {
             // First time we've reached this level
             assert_eq!(self.steps, self.levels.len());
-            let to_run = runnable.first().unwrap().id();
-            self.levels.push((to_run, runnable.len() == 1));
+            let to_run = sorted_runnable.first().unwrap().id();
+            self.levels.push((to_run, sorted_runnable.len() == 1));
             to_run
         } else {
             let (last_choice, was_last) = self.levels[self.steps];
@@ -84,10 +88,10 @@ impl Scheduler for DfsScheduler {
                     !was_last,
                     "if we are making a change, there should be another available option"
                 );
-                let next_idx = runnable.iter().position(|t| t.id() == last_choice).unwrap() + 1;
-                let next = runnable[next_idx].id();
+                let next_idx = sorted_runnable.iter().position(|t| t.id() == last_choice).unwrap() + 1;
+                let next = sorted_runnable[next_idx].id();
                 self.levels.drain(self.steps..);
-                self.levels.push((next, next_idx == runnable.len() - 1));
+                self.levels.push((next, next_idx == sorted_runnable.len() - 1));
                 next
             }
         };

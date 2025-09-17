@@ -899,10 +899,6 @@ impl ExecutionState {
 
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
 
-        // Sort schedulable tasks by TaskId to ensure stable ordering for schedulers that depend on it (like DFS)
-        // This is necessary because swap_remove operations can change the order of tasks in the vector
-        self.schedulable_tasks.sort_unstable_by_key(|&task| unsafe { (*task).id() });
-
         // Cast the slice of raw pointers to a slice of references in place to provide schedulers with a safe API
         //
         // SAFETY: This is safe because the tasks themselves are only being accessed through this shared reference by the
