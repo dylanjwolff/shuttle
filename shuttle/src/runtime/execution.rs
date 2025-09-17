@@ -892,12 +892,16 @@ impl ExecutionState {
         // (2) All runnable tasks have been detached AND there are no unfinished attached tasks
         // If there are some unfinished attached tasks and all runnable tasks are detached, we must
         // run some detached task to give them a chance to unblock some unfinished attached task.
-        if !self.num_runnable > 0 || self.num_unfinished_attached == 0 {
+        if self.num_runnable == 0 || self.num_unfinished_attached == 0 {
             self.next_task = ScheduledTask::Finished;
             return Ok(());
         }
 
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
+
+        // Sort schedulable tasks by TaskId to ensure stable ordering for schedulers that depend on it (like DFS)
+        // This is necessary because swap_remove operations can change the order of tasks in the vector
+        self.schedulable_tasks.sort_unstable_by_key(|&task| unsafe { (*task).id() });
 
         // Cast the slice of raw pointers to a slice of references in place to provide schedulers with a safe API
         //
