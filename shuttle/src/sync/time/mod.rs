@@ -263,7 +263,7 @@ impl Interval {
 }
 
 /// Timeout a future
-pub fn tokio_timeout<F>(f: F, d: Duration) -> Timeout<F>
+pub fn tokio_timeout<F>(d: Duration, f: F) -> Timeout<F>
 where
     F: Future,
 {
