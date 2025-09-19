@@ -203,12 +203,28 @@ pub async fn tokio_sleep(dur: Duration) {
     sleep(dur);
 }
 
+/// Returns a future which sleeps until the deadline is reached
+pub async fn tokio_sleep_until(deadline: Instant) {
+    if let Some(dur) = deadline.checked_duration_since(Instant::now()) {
+        sleep(dur);
+    }
+}
+
 /// Tokio interval
 pub fn tokio_interval(dur: Duration) -> Interval {
     Interval {
         start: None,
         ticks: 0,
         duration: dur,
+    }
+}
+
+/// Tokio interval
+pub fn tokio_interval_at(start: Instant, period: Duration) -> Interval {
+    Interval {
+        start: Some(start),
+        ticks: 0,
+        duration: period,
     }
 }
 
@@ -224,18 +240,25 @@ pub struct Interval {
 impl Interval {
     /// tick
     pub async fn tick(&mut self) -> Instant {
-        let start = self.start.get_or_insert_with(Instant::now);
-        let mut total_duration = Duration::from_millis(0);
-        for _ in 1..=self.ticks {
-            total_duration = total_duration.checked_add(self.duration).unwrap();
-        }
+        let ret = if let Some(start) = self.start {
+            let mut total_duration = Duration::from_millis(0);
+            // TODO: switch to multiply
+            for _ in 1..=self.ticks {
+                total_duration = total_duration.checked_add(self.duration).unwrap();
+            }
+            let end = start.checked_add(total_duration).unwrap();
+            let now = Instant::now();
+            if let Some(sleep_time) = end.checked_duration_since(now) {
+                sleep(sleep_time);
+            }
+            end
+        } else {
+            let now = Instant::now();
+            self.start = Some(now);
+            now
+        };
         self.ticks += 1;
-        let end = start.checked_add(total_duration).unwrap();
-        let now = Instant::now();
-        if let Some(sleep_time) = end.checked_duration_since(now) {
-            sleep(sleep_time);
-        }
-        end
+        ret
     }
 }
 
