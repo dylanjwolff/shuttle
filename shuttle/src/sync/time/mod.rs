@@ -54,6 +54,11 @@ pub enum Duration {
 }
 
 impl Duration {
+    /// The maximum duration.
+    pub const MAX: Duration = Duration::Std(std::time::Duration::MAX);
+    /// Zero duration.
+    pub const ZERO: Duration = Duration::Std(std::time::Duration::ZERO);
+
     /// Creates a new Duration from the specified number of seconds.
     pub fn from_secs(secs: u64) -> Self {
         Duration::Std(std::time::Duration::from_secs(secs))
