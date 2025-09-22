@@ -384,6 +384,12 @@ impl Interval {
     pub fn poll_tick(&mut self, _cx: &mut Context<'_>) -> Poll<Instant> {
         Poll::Ready(self.tick_inner())
     }
+
+    /// reset
+    pub fn reset(&mut self) {
+        self.start = None;
+        self.ticks = 0;
+    }
 }
 
 /// Timeout a future
