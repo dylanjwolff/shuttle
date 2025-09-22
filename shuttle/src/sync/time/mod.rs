@@ -4,7 +4,7 @@
 
 use std::cmp::Ordering;
 use std::future::Future;
-use std::ops::{Add, Mul};
+use std::ops::{Add, AddAssign, Mul, Sub, SubAssign};
 use std::{cell::RefCell, rc::Rc};
 
 use std::pin::Pin;
@@ -98,6 +98,13 @@ impl Duration {
         }
     }
 
+    ///  Checked Duration subtraction. Computes self - other, returning None if other is greater than self.
+    pub fn checked_sub(&self, other: Duration) -> Option<Self> {
+        match (self, other) {
+            (Duration::Std(a), Duration::Std(b)) => a.checked_sub(b).map(Duration::Std),
+        }
+    }
+
     ///  Checked Duration multiplication. Computes self * other, returning None if overflow occurred.
     pub fn checked_mul(&self, b: u32) -> Option<Self> {
         match self {
@@ -134,6 +141,18 @@ impl Add for Duration {
     }
 }
 
+impl AddAssign for Duration {
+    fn add_assign(&mut self, other: Self) {
+        *self = self.checked_add(other).unwrap()
+    }
+}
+
+impl SubAssign for Duration {
+    fn sub_assign(&mut self, other: Self) {
+        *self = self.checked_sub(other).unwrap()
+    }
+}
+
 impl Mul<u32> for Duration {
     type Output = Duration;
 
@@ -151,7 +170,7 @@ impl Mul<Duration> for u32 {
 }
 
 /// A Shuttle Instant
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Instant {
     /// Deterministically simulated clock time represented by a Duration from the start of the test
     Simulated(std::time::Duration),
@@ -165,10 +184,16 @@ impl Instant {
 
     /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
     /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
-    pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
+    pub fn checked_sub(&self, earlier: Instant) -> Option<Duration> {
         match (self, earlier) {
             (Instant::Simulated(a), Instant::Simulated(b)) => a.checked_sub(b).map(Duration::Std),
         }
+    }
+
+    /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
+    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
+    pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
+        self.checked_sub(earlier)
     }
 
     /// Returns Some(t) where t is the time self + duration if t can be represented as Instant (which means it’s inside the bounds
@@ -186,6 +211,58 @@ impl Instant {
         Instant::now()
             .checked_duration_since(*self)
             .unwrap_or(Duration::from_secs(0))
+    }
+}
+
+impl Add<Duration> for Instant {
+    type Output = Instant;
+
+    fn add(self, other: Duration) -> Instant {
+        self.checked_add(other).unwrap()
+    }
+}
+
+impl AddAssign<Duration> for Instant {
+    fn add_assign(&mut self, other: Duration) {
+        *self = self.checked_add(other).unwrap()
+    }
+}
+
+impl Sub<Instant> for Instant {
+    type Output = Duration;
+
+    fn sub(self, earlier: Instant) -> Duration {
+        self.checked_sub(earlier).unwrap()
+    }
+}
+
+impl SubAssign<Duration> for Instant {
+    fn sub_assign(&mut self, other: Duration) {
+        *self = *self - other
+    }
+}
+
+impl Sub<Duration> for Instant {
+    type Output = Instant;
+
+    fn sub(self, other: Duration) -> Instant {
+        match (self, other) {
+            (Instant::Simulated(i), Duration::Std(d)) => Instant::Simulated(i - d),
+        }
+    }
+}
+
+impl Ord for Instant {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Instant::Simulated(a), Instant::Simulated(b)) => a.cmp(b),
+        }
+    }
+}
+
+impl PartialOrd for Instant {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -274,19 +351,20 @@ impl Sleep {
 #[derive(Debug)]
 pub struct Interval {
     start: Option<Instant>,
-    ticks: usize,
+    ticks: u32,
     period: Duration,
 }
 
 impl Interval {
     /// tick
     pub async fn tick(&mut self) -> Instant {
+        self.tick_inner()
+    }
+
+    fn tick_inner(&mut self) -> Instant {
         let ret = if let Some(start) = self.start {
             let mut total_duration = Duration::from_millis(0);
-            // TODO: switch to multiply
-            for _ in 1..=self.ticks {
-                total_duration = total_duration.checked_add(self.period).unwrap();
-            }
+            total_duration += self.period * self.ticks;
             let end = start.checked_add(total_duration).unwrap();
             let now = Instant::now();
             if let Some(sleep_time) = end.checked_duration_since(now) {
@@ -300,6 +378,11 @@ impl Interval {
         };
         self.ticks += 1;
         ret
+    }
+
+    /// poll tick
+    pub fn poll_tick(&mut self, _cx: &mut Context<'_>) -> Poll<Instant> {
+        Poll::Ready(self.tick_inner())
     }
 }
 
