@@ -199,15 +199,15 @@ pub fn sleep(dur: Duration) {
 }
 
 /// Returns a future which sleeps until the duration has elapsed
-pub async fn tokio_sleep(dur: Duration) {
-    sleep(dur);
+pub fn tokio_sleep(dur: Duration) -> Sleep {
+    Sleep {
+        deadline: Instant::now().checked_add(dur).unwrap(),
+    }
 }
 
 /// Returns a future which sleeps until the deadline is reached
-pub async fn tokio_sleep_until(deadline: Instant) {
-    if let Some(dur) = deadline.checked_duration_since(Instant::now()) {
-        sleep(dur);
-    }
+pub fn tokio_sleep_until(deadline: Instant) -> Sleep {
+    Sleep { deadline }
 }
 
 /// Tokio interval
@@ -215,7 +215,7 @@ pub fn tokio_interval(dur: Duration) -> Interval {
     Interval {
         start: None,
         ticks: 0,
-        duration: dur,
+        period: dur,
     }
 }
 
@@ -224,7 +224,48 @@ pub fn tokio_interval_at(start: Instant, period: Duration) -> Interval {
     Interval {
         start: Some(start),
         ticks: 0,
-        duration: period,
+        period,
+    }
+}
+
+/// sleep
+#[pin_project]
+#[derive(Debug)]
+pub struct Sleep {
+    deadline: Instant,
+}
+
+impl Future for Sleep {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let now = Instant::now();
+        if let Some(dur) = self.deadline.checked_duration_since(now) {
+            sleep(dur);
+            Poll::Ready(())
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+
+impl Sleep {
+    /// Returns the instant at which the future will complete.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    /// Returns `true` if `Sleep` has elapsed.
+    ///
+    /// A `Sleep` instance is elapsed when the requested duration has elapsed.
+    pub fn is_elapsed(&self) -> bool {
+        self.deadline.checked_duration_since(Instant::now()).is_none()
+    }
+
+    /// Resets the `Sleep` instance to a new deadline.
+    pub fn reset(self: Pin<&mut Self>, deadline: Instant) {
+        let me = self.project();
+        *me.deadline = deadline;
     }
 }
 
@@ -234,7 +275,7 @@ pub fn tokio_interval_at(start: Instant, period: Duration) -> Interval {
 pub struct Interval {
     start: Option<Instant>,
     ticks: usize,
-    duration: Duration,
+    period: Duration,
 }
 
 impl Interval {
@@ -244,7 +285,7 @@ impl Interval {
             let mut total_duration = Duration::from_millis(0);
             // TODO: switch to multiply
             for _ in 1..=self.ticks {
-                total_duration = total_duration.checked_add(self.duration).unwrap();
+                total_duration = total_duration.checked_add(self.period).unwrap();
             }
             let end = start.checked_add(total_duration).unwrap();
             let now = Instant::now();

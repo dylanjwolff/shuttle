@@ -83,7 +83,7 @@ fn test_tokio_sleep() {
             let start = Instant::now();
             tokio_sleep(Duration::from_millis(50)).await;
             let elapsed = start.elapsed();
-            assert!(elapsed >= Duration::from_millis(50));
+            assert_eq!(elapsed.as_millis(), Duration::from_millis(50).as_millis());
         });
     });
 }
