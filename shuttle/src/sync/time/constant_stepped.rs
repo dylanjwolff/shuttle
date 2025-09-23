@@ -93,6 +93,10 @@ impl TimeModel for ConstantSteppedTimeModel {
 
         ExecutionState::with(|s| self.unblock_expired(s));
     }
+
+    fn advance(&mut self, dur: Duration) {
+        self.current_time_elapsed += dur.unwrap_std();
+    }
 }
 
 /// A constant distrubution; each sample returns the same time

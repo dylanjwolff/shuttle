@@ -40,6 +40,8 @@ pub trait TimeModel: std::fmt::Debug {
     fn pause(&mut self);
     /// resume
     fn resume(&mut self);
+    /// advance
+    fn advance(&mut self, duration: Duration);
 }
 
 fn get_time_model() -> Rc<RefCell<dyn TimeModel>> {
@@ -277,6 +279,15 @@ pub fn sleep(dur: Duration) {
     ExecutionState::with(|s| Rc::clone(&s.time_model))
         .borrow_mut()
         .sleep(dur);
+    thread::switch();
+}
+
+/// Advances the current global time without putting the current thread to sleep
+/// Behavior of this function depends on the TimeModel provided to Shuttle
+pub fn advance(dur: Duration) {
+    ExecutionState::with(|s| Rc::clone(&s.time_model))
+        .borrow_mut()
+        .advance(dur);
     thread::switch();
 }
 
