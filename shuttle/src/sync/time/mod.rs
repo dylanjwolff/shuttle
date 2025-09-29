@@ -10,7 +10,7 @@ use std::{cell::RefCell, rc::Rc};
 use std::pin::Pin;
 
 use pin_project::pin_project;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use crate::runtime::execution::ExecutionState;
 
@@ -28,8 +28,8 @@ pub trait TimeDistribution<D> {
 pub trait TimeModel: std::fmt::Debug {
     /// sleep
     fn sleep(&mut self, duration: Duration);
-    /// wake the next sleeping task if all tasks are blocked
-    fn wake_next(&mut self);
+    /// wake the next sleeping task if all tasks are blocked; returns true if exists task was able to be woken
+    fn wake_next(&mut self) -> bool;
     /// reset
     fn reset(&mut self);
     /// step
@@ -42,6 +42,8 @@ pub trait TimeModel: std::fmt::Debug {
     fn resume(&mut self);
     /// advance
     fn advance(&mut self, duration: Duration);
+    /// poll timeout
+    fn poll_timeout_is_expired(&mut self, deadline: Instant, waker: Option<Waker>) -> bool;
 }
 
 fn get_time_model() -> Rc<RefCell<dyn TimeModel>> {
@@ -189,6 +191,13 @@ impl Instant {
         get_time_model().borrow().instant()
     }
 
+    /// Cast this instant to a simulated time represented by a std::time::Duration
+    pub fn unwrap_simulated(self) -> std::time::Duration {
+        match self {
+            Instant::Simulated(d) => d,
+        }
+    }
+
     /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
     /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
     pub fn checked_sub(&self, earlier: Instant) -> Option<Duration> {
@@ -308,6 +317,7 @@ pub fn tokio_interval(dur: Duration) -> Interval {
     Interval {
         start: None,
         ticks: 0,
+        current_interval: None,
         period: dur,
     }
 }
@@ -317,6 +327,7 @@ pub fn tokio_interval_at(start: Instant, period: Duration) -> Interval {
     Interval {
         start: Some(start),
         ticks: 0,
+        current_interval: None,
         period,
     }
 }
@@ -331,13 +342,14 @@ pub struct Sleep {
 impl Future for Sleep {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let now = Instant::now();
-        if let Some(dur) = self.deadline.checked_duration_since(now) {
-            sleep(dur);
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let is_expired = get_time_model()
+            .borrow_mut()
+            .poll_timeout_is_expired(self.deadline, Some(cx.waker().clone()));
+        if is_expired {
             Poll::Ready(())
         } else {
-            Poll::Ready(())
+            Poll::Pending
         }
     }
 }
@@ -369,42 +381,53 @@ pub struct Interval {
     start: Option<Instant>,
     ticks: u32,
     period: Duration,
+    current_interval: Option<Pin<Box<Sleep>>>,
 }
 
 impl Interval {
     /// tick
     pub async fn tick(&mut self) -> Instant {
-        self.tick_inner()
+        let deadline = self.next_deadline();
+        tokio_sleep_until(deadline).await;
+        self.ticks += 1;
+        deadline
     }
 
-    fn tick_inner(&mut self) -> Instant {
-        let ret = if let Some(start) = self.start {
-            let mut total_duration = Duration::from_millis(0);
+    fn next_deadline(&mut self) -> Instant {
+        if let Some(start) = self.start {
+            let mut total_duration = Duration::ZERO;
             total_duration += self.period * self.ticks;
-            let end = start.checked_add(total_duration).unwrap();
-            let now = Instant::now();
-            if let Some(sleep_time) = end.checked_duration_since(now) {
-                sleep(sleep_time);
-            }
-            end
+            start.checked_add(total_duration).unwrap()
         } else {
             let now = Instant::now();
             self.start = Some(now);
             now
-        };
-        self.ticks += 1;
-        ret
+        }
     }
 
     /// poll tick
-    pub fn poll_tick(&mut self, _cx: &mut Context<'_>) -> Poll<Instant> {
-        Poll::Ready(self.tick_inner())
+    pub fn poll_tick(&mut self, cx: &mut Context<'_>) -> Poll<Instant> {
+        let deadline = self.next_deadline();
+        if self.current_interval.is_none() {
+            self.current_interval = Some(Box::pin(tokio_sleep_until(deadline)));
+        }
+
+        match self.current_interval.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Ready(_) => {
+                self.current_interval = None;
+                Poll::Ready(deadline)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 
     /// reset
     pub fn reset(&mut self) {
         self.start = None;
         self.ticks = 0;
+        if let Some(x) = self.current_interval.as_mut() {
+            x.as_mut().reset(Instant::now());
+        }
     }
 }
 
@@ -414,8 +437,7 @@ where
     F: Future,
 {
     Timeout {
-        start: None,
-        duration: d,
+        deadline: Instant::now() + d,
         future: f,
     }
 }
@@ -427,8 +449,7 @@ pub struct Timeout<F>
 where
     F: Future,
 {
-    start: Option<Instant>,
-    duration: Duration,
+    deadline: Instant,
     #[pin]
     future: F,
 }
@@ -445,20 +466,26 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        let start = this.start.get_or_insert_with(Instant::now);
-        if start.elapsed() > *this.duration {
+        println!("timeout poll {:?}", this.deadline);
+
+        let tm = get_time_model();
+        let expired = tm.borrow_mut().poll_timeout_is_expired(*this.deadline, None);
+        if expired {
             return Poll::Ready(Err(Elapsed));
         }
 
         match this.future.poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(x) => {
-                if start.elapsed() > *this.duration {
-                    Poll::Ready(Err(Elapsed))
-                } else {
-                    Poll::Ready(Ok(x))
+            Poll::Pending => {
+                println!("2nd timeout poll");
+                let expired = tm
+                    .borrow_mut()
+                    .poll_timeout_is_expired(*this.deadline, Some(cx.waker().clone()));
+                if expired {
+                    return Poll::Ready(Err(Elapsed));
                 }
+                Poll::Pending
             }
+            Poll::Ready(x) => Poll::Ready(Ok(x)),
         }
     }
 }

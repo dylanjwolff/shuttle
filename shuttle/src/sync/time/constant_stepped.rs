@@ -3,6 +3,7 @@
 use std::{
     cmp::{max, Reverse},
     collections::BinaryHeap,
+    task::Waker,
 };
 
 use tracing::{debug, warn};
@@ -17,7 +18,7 @@ pub struct ConstantSteppedTimeModel {
     distribution: ConstantTimeDistribution,
     current_step_size: std::time::Duration,
     current_time_elapsed: std::time::Duration,
-    waiters: BinaryHeap<Reverse<(std::time::Duration, TaskId)>>,
+    waiters: BinaryHeap<Reverse<(std::time::Duration, DeadlineWaker)>>,
 }
 
 unsafe impl Send for ConstantSteppedTimeModel {}
@@ -33,16 +34,54 @@ impl ConstantSteppedTimeModel {
         }
     }
 
-    fn unblock_expired(&mut self, state: &mut ExecutionState) {
-        while let Some(id) = self.waiters.peek().and_then(|Reverse((t, id))| {
+    fn unblock_expired(&mut self) {
+        while let Some(waker) = self.waiters.peek().and_then(|Reverse((t, waker))| {
             if *t <= self.current_time_elapsed {
-                Some(*id)
+                Some(waker.clone())
             } else {
                 None
             }
         }) {
             _ = self.waiters.pop();
-            state.get_mut(id).unblock();
+            match waker {
+                DeadlineWaker::SyncSleep(id) => ExecutionState::with(|state| state.get_mut(id).unblock()),
+                DeadlineWaker::AsyncWaker(_, w) => w.wake(),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum DeadlineWaker {
+    SyncSleep(TaskId),
+    AsyncWaker(TaskId, Waker),
+}
+
+impl PartialEq for DeadlineWaker {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (DeadlineWaker::SyncSleep(a), DeadlineWaker::SyncSleep(b)) => a == b,
+            (DeadlineWaker::AsyncWaker(a, _), DeadlineWaker::AsyncWaker(b, _)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for DeadlineWaker {}
+
+impl PartialOrd for DeadlineWaker {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DeadlineWaker {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (DeadlineWaker::SyncSleep(a), DeadlineWaker::SyncSleep(b))
+            | (DeadlineWaker::AsyncWaker(a, _), DeadlineWaker::AsyncWaker(b, _))
+            | (DeadlineWaker::SyncSleep(a), DeadlineWaker::AsyncWaker(b, _))
+            | (DeadlineWaker::AsyncWaker(a, _), DeadlineWaker::SyncSleep(b)) => a.cmp(b),
         }
     }
 }
@@ -64,7 +103,10 @@ impl TimeModel for ConstantSteppedTimeModel {
             return;
         }
         let wake_time = self.current_time_elapsed + duration;
-        let item = (wake_time, ExecutionState::with(|s| s.current().id()));
+        let item = (
+            wake_time,
+            DeadlineWaker::SyncSleep(ExecutionState::with(|s| s.current().id())),
+        );
         self.waiters.push(Reverse(item));
         ExecutionState::with(|s| s.current_mut().block(false));
     }
@@ -72,7 +114,7 @@ impl TimeModel for ConstantSteppedTimeModel {
     fn step(&mut self) {
         debug!("step");
         self.current_time_elapsed += self.current_step_size;
-        ExecutionState::with(|s| self.unblock_expired(s));
+        self.unblock_expired();
     }
 
     fn reset(&mut self) {
@@ -85,17 +127,35 @@ impl TimeModel for ConstantSteppedTimeModel {
         Instant::Simulated(self.current_time_elapsed)
     }
 
-    fn wake_next(&mut self) {
-        debug!("wake next");
+    fn wake_next(&mut self) -> bool {
+        println!("wake next {:?}", self.waiters.peek());
+        println!("wake next {:?}", self.waiters);
+        if self.waiters.len() == 0 {
+            return false;
+        }
         if let Some(Reverse((time, _))) = self.waiters.peek() {
             self.current_time_elapsed = max(self.current_time_elapsed, *time);
         }
-
-        ExecutionState::with(|s| self.unblock_expired(s));
+        self.unblock_expired();
+        true
     }
 
     fn advance(&mut self, dur: Duration) {
         self.current_time_elapsed += dur.unwrap_std();
+    }
+
+    fn poll_timeout_is_expired(&mut self, deadline: Instant, waker: Option<Waker>) -> bool {
+        let deadline = deadline.unwrap_simulated();
+        if deadline <= self.current_time_elapsed {
+            return true;
+        }
+
+        if let Some(waker) = waker {
+            let id = ExecutionState::with(|s| s.current().id());
+            let item = (deadline, DeadlineWaker::AsyncWaker(id, waker));
+            self.waiters.push(Reverse(item));
+        }
+        false
     }
 }
 

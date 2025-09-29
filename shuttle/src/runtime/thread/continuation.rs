@@ -257,12 +257,12 @@ unsafe impl Send for PooledContinuation {}
 /// Possibly yield back to the executor to perform a context switch.
 pub(crate) fn switch() {
     crate::annotations::record_tick();
-    let nr = ExecutionState::num_runnable();
-    if nr == 0 {
-        ExecutionState::with(|s| Rc::clone(&s.time_model))
+    // While there are no runnable tasks and tasks are able to be woken by the time model, continue waking tasks
+    while ExecutionState::num_runnable() == 0
+        && ExecutionState::with(|s| Rc::clone(&s.time_model))
             .borrow_mut()
-            .wake_next();
-    }
+            .wake_next()
+    {}
 
     if ExecutionState::maybe_yield() {
         let r = generator::yield_(ContinuationOutput::Yielded).unwrap();
