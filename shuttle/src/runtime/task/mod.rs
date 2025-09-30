@@ -464,12 +464,7 @@ impl Task {
     /// Block the current thread. If `allow_spurious_wakeups` is true, then the scheduler is
     /// permitted to spuriously wake up the thread (though it will still not count as a live thread
     /// for deadlock detection purposes for as long as it remains blocked).
-    pub(crate) fn block(
-        &mut self,
-        allow_spurious_wakeups: bool,
-        runnable_tasks: &mut Vec<*const Task>,
-        num_runnable: &mut u32,
-    ) {
+    pub(crate) fn block(&mut self, allow_spurious_wakeups: bool, num_runnable: &mut u32) -> bool {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
 
@@ -479,16 +474,11 @@ impl Task {
             *num_runnable -= 1
         };
         self.state = TaskState::Blocked { allow_spurious_wakeups };
-        if was_runnable && !allow_spurious_wakeups {
-            let pos = runnable_tasks
-                .iter()
-                .position(|&t| unsafe { (*t).id() == self.id })
-                .expect("ID not found");
-            runnable_tasks.swap_remove(pos);
-        }
+        // Return whether this task should be removed from runnable_tasks
+        was_runnable && !allow_spurious_wakeups
     }
 
-    pub(crate) fn sleep(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
+    pub(crate) fn sleep(&mut self, num_runnable: &mut u32) -> bool {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
         trace!("sleep");
@@ -499,16 +489,11 @@ impl Task {
             *num_runnable -= 1
         };
         self.state = TaskState::Sleeping;
-        if was_runnable {
-            let pos = runnable_tasks
-                .iter()
-                .position(|&t| unsafe { (*t).id() == self.id })
-                .expect("ID not found");
-            runnable_tasks.swap_remove(pos);
-        }
+        // Return whether this task should be removed from runnable_tasks
+        was_runnable
     }
 
-    pub(crate) fn unblock(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
+    pub(crate) fn unblock(&mut self, num_runnable: &mut u32) -> bool {
         // Note we don't assert the task is blocked here. For example, a task invoking its own waker
         // will not be blocked when this is called.
         assert!(self.state != TaskState::Finished);
@@ -517,23 +502,18 @@ impl Task {
             *num_runnable += 1
         };
         self.state = TaskState::Runnable;
-        if !was_runnable {
-            runnable_tasks.push(self as *const Task);
-        }
 
         // When a task gets unblocked, it's definitely no longer blocked in a call to `park`. This
         // is necessary to do here because a parked task could be spuriously woken up outside of the
         // `unpark` path. If it later becomes blocked by something else, we don't want a later
         // `unpark` to be able to unblock the task.
         self.park_state.blocked_in_park = false;
+
+        // Return whether this task should be added to runnable_tasks
+        !was_runnable
     }
 
-    pub(crate) fn finish(
-        &mut self,
-        runnable_tasks: &mut Vec<*const Task>,
-        num_unfinished_attached: &mut u32,
-        num_runnable: &mut u32,
-    ) {
+    pub(crate) fn finish(&mut self, num_unfinished_attached: &mut u32, num_runnable: &mut u32) -> bool {
         trace!("finish");
         assert!(self.state != TaskState::Finished);
         let was_runnable = self.is_schedulable();
@@ -544,13 +524,8 @@ impl Task {
             *num_unfinished_attached -= 1;
         }
         self.state = TaskState::Finished;
-        if was_runnable {
-            let pos = runnable_tasks
-                .iter()
-                .position(|&t| unsafe { (*t).id() == self.id })
-                .expect("ID not found");
-            runnable_tasks.swap_remove(pos);
-        }
+        // Return whether this task should be removed from runnable_tasks
+        was_runnable
     }
 
     /// Potentially put this task to sleep after it was polled by the executor, unless someone has
@@ -558,19 +533,23 @@ impl Task {
     ///
     /// A synchronous Task should never call this, because we want threads to be enabled-by-default
     /// to avoid bugs where Shuttle incorrectly omits a potential execution.
-    pub(crate) fn sleep_unless_woken(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
+    pub(crate) fn sleep_unless_woken(&mut self, num_runnable: &mut u32) -> bool {
         let was_woken = std::mem::replace(&mut self.woken, false);
         if !was_woken {
-            self.sleep(runnable_tasks, num_runnable);
+            self.sleep(num_runnable)
+        } else {
+            false
         }
     }
 
     /// Remember that our waker has been called, and so we should not block the next time the
     /// executor tries to put us to sleep.
-    pub(super) fn wake(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
+    pub(super) fn wake(&mut self, num_runnable: &mut u32) -> bool {
         self.woken = true;
         if self.state == TaskState::Sleeping {
-            self.unblock(runnable_tasks, num_runnable);
+            self.unblock(num_runnable)
+        } else {
+            false
         }
     }
 
@@ -636,7 +615,7 @@ impl Task {
     /// documentation for [`std::thread::park`], which says that "it may also return spuriously,
     /// without consuming the token"). Returns true if the execution should switch to a different
     /// task (e.g., if the token was unavailable).
-    pub(crate) fn park(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) -> bool {
+    pub(crate) fn park(&mut self, num_runnable: &mut u32) -> (bool, bool) {
         assert!(
             !self.park_state.blocked_in_park,
             "task cannot park while already parked"
@@ -645,16 +624,16 @@ impl Task {
 
         if self.park_state.token_available {
             self.park_state.token_available = false;
-            false
+            (false, false) // (should_remove_from_runnable, did_block)
         } else {
             self.park_state.blocked_in_park = true;
-            self.block(true, runnable_tasks, num_runnable);
-            true
+            let should_remove = self.block(true, num_runnable);
+            (should_remove, true) // (should_remove_from_runnable, did_block)
         }
     }
 
     /// Make the task's park token available, and unblock the task if it was parked.
-    pub(crate) fn unpark(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
+    pub(crate) fn unpark(&mut self, num_runnable: &mut u32) -> bool {
         if self.park_state.blocked_in_park {
             assert!(
                 self.blocked() && self.can_spuriously_wakeup(),
@@ -665,11 +644,12 @@ impl Task {
                 "token shouldn't be available for parked task"
             );
 
-            self.unblock(runnable_tasks, num_runnable);
+            self.unblock(num_runnable)
         } else {
             // If the thread isn't currently blocked in `park`, then make the token available. If
             // the token already is available, then this does nothing.
             self.park_state.token_available = true;
+            false
         }
     }
 

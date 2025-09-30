@@ -239,7 +239,7 @@ impl<S: Scheduler> Scheduler for PortfolioStoppableScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &[Rc<RefCell<Task>>],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {

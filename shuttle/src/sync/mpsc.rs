@@ -219,7 +219,7 @@ impl<T> Channel<T> {
                 // When a sender successfully sends on a rendezvous channel, it knows that the receiver will perform
                 // the matching receive, so we need to update the sender's clock with the receiver's.
                 if is_rendezvous {
-                    let recv_clock = s.get_clock(tid).clone();
+                    let recv_clock = s.get_clock(tid);
                     s.update_clock(&recv_clock);
                 }
             });
@@ -361,7 +361,7 @@ impl<T> Channel<T> {
         let TimestampedValue { value, clock } = item;
         ExecutionState::with(|s| {
             // Since we already incremented the receiver's clock above, just update it here
-            s.get_clock_mut(me).update(&clock);
+            s.update_clock(&clock);
 
             // If this is a (non-rendezvous) bounded channel, propagate causality backwards to sender
             if let Some(receiver_clock) = &mut state.receiver_clock {
@@ -369,7 +369,7 @@ impl<T> Channel<T> {
                 if bound > 0 {
                     // non-rendezvous
                     assert!(receiver_clock.len() < bound);
-                    receiver_clock.push(s.get_clock(me).clone());
+                    receiver_clock.push(s.get_clock(me));
                 }
             }
         });

@@ -2,6 +2,8 @@ use shuttle::scheduler::{RandomScheduler, Schedule, Scheduler, Task, TaskId};
 use shuttle::sync::Mutex;
 use shuttle::Config;
 use shuttle::{thread, Runner};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use test_log::test;
@@ -27,7 +29,7 @@ impl<S: Scheduler> Scheduler for SleepableScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &[Rc<RefCell<Task>>],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {

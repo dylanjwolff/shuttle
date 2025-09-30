@@ -1,5 +1,7 @@
 use crate::runtime::task::{Task, TaskId};
 use crate::scheduler::{Schedule, Scheduler};
+use std::cell::RefCell;
+use std::rc::Rc;
 use tracing::info;
 
 /// A `MetricsScheduler` wraps an inner `Scheduler` and collects metrics about the schedules it's
@@ -85,7 +87,7 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &[Rc<RefCell<Task>>],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
@@ -94,7 +96,7 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
         self.steps += 1;
         if choice != self.last_task {
             self.context_switches += 1;
-            if runnable_tasks.iter().any(|t| t.id() == self.last_task) {
+            if runnable_tasks.iter().any(|t| t.borrow().id() == self.last_task) {
                 self.preemptions += 1;
             }
         }

@@ -1,6 +1,8 @@
 use crate::runtime::task::{Task, TaskId, DEFAULT_INLINE_TASKS};
 use crate::scheduler::{Schedule, Scheduler};
 use smallvec::SmallVec;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ScheduleRecord {
@@ -60,7 +62,7 @@ impl<S: Scheduler> Scheduler for UncontrolledNondeterminismCheckScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &[Rc<RefCell<Task>>],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
@@ -68,7 +70,7 @@ impl<S: Scheduler> Scheduler for UncontrolledNondeterminismCheckScheduler<S> {
             let choice = self.scheduler.next_task(runnable_tasks, current_task, is_yielding);
             let runnable_ids = runnable_tasks
                 .iter()
-                .map(|t| t.id())
+                .map(|t| t.borrow().id())
                 .collect::<SmallVec<[TaskId; DEFAULT_INLINE_TASKS]>>();
             self.previous_schedule
                 .push(ScheduleRecord::Task(choice, runnable_ids, is_yielding));
@@ -87,7 +89,7 @@ impl<S: Scheduler> Scheduler for UncontrolledNondeterminismCheckScheduler<S> {
                 ScheduleRecord::Task(maybe_id, runnables, was_yielding) => {
                     let runnable_ids = runnable_tasks
                         .iter()
-                        .map(|t| t.id())
+                        .map(|t| t.borrow().id())
                         .collect::<SmallVec<[TaskId; DEFAULT_INLINE_TASKS]>>();
                     if *runnables.as_slice() != *runnable_ids {
                         panic!("possible nondeterminism: set of runnable tasks is different than expected.\nExpected:\n{runnables:?}\nbut got:\n{runnable_ids:?}");

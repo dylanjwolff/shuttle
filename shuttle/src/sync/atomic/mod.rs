@@ -222,7 +222,7 @@ impl<T: Copy + Eq> Atomic<T> {
         ExecutionState::with(|s| {
             let clock = s.increment_clock();
             let mut self_clock = self.clock.borrow_mut();
-            self_clock.as_mut().unwrap().update(clock);
+            self_clock.as_mut().unwrap().update(&clock);
         });
     }
 

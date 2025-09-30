@@ -94,6 +94,8 @@ fn max_steps_fail() {
 #[test]
 fn max_steps_early_exit_scheduler() {
     use shuttle::scheduler::{Schedule, Scheduler, Task, TaskId};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[derive(Debug)]
     struct EarlyExitScheduler {
@@ -127,7 +129,7 @@ fn max_steps_early_exit_scheduler() {
 
         fn next_task(
             &mut self,
-            runnable_tasks: &[&Task],
+            runnable_tasks: &[Rc<RefCell<Task>>],
             _current_task: Option<TaskId>,
             _is_yielding: bool,
         ) -> Option<TaskId> {
@@ -135,7 +137,7 @@ fn max_steps_early_exit_scheduler() {
                 None
             } else {
                 self.steps += 1;
-                Some(runnable_tasks.first().unwrap().id())
+                Some(runnable_tasks.first().unwrap().borrow().id())
             }
         }
 

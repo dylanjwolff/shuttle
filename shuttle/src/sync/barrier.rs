@@ -101,7 +101,7 @@ impl Barrier {
         // Update the barrier's clock with the clock of this thread
         ExecutionState::with(|s| {
             let clock = s.increment_clock();
-            state.clock.update(clock);
+            state.clock.update(&clock);
         });
 
         // Add the current thread to `waiters`. It shouldn't already be present.
@@ -136,10 +136,16 @@ impl Barrier {
                 // `waiters` includes the current task.
                 for tid in waiters {
                     let (t, runnable_tasks, num_runnable) =
-                        (&mut s.tasks[tid.0], &mut s.schedulable_tasks, &mut s.num_runnable);
-                    t.clock.increment(tid);
-                    t.clock.update(&clock);
-                    t.unblock(runnable_tasks, num_runnable);
+                        (&s.tasks[tid.0], &mut s.schedulable_tasks, &mut s.num_runnable);
+                    {
+                        let mut task_borrow = t.borrow_mut();
+                        task_borrow.clock.increment(tid);
+                        task_borrow.clock.update(&clock);
+                    }
+                    let should_add = t.borrow_mut().unblock(num_runnable);
+                    if should_add {
+                        runnable_tasks.push(t.clone());
+                    }
                 }
             });
         };

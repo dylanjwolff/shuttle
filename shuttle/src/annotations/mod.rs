@@ -252,7 +252,7 @@ cfg_if::cfg_if! {
                     task_id,
                     info,
                     event,
-                    ExecutionState::try_with(|state| state.get_clock(task_id).clone()),
+                    ExecutionState::try_with(|state| state.get_clock(task_id)),
                     state.last_runnable_ids.take(),
                 ))
             });

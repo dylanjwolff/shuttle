@@ -6,7 +6,9 @@ use rand::rngs::OsRng;
 use rand::seq::{index::sample, SliceRandom};
 use rand::{Rng, RngCore, SeedableRng};
 use rand_pcg::Pcg64Mcg;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// A scheduler that implements the Probabilistic Concurrency Testing (PCT) algorithm.
 ///
@@ -122,11 +124,16 @@ impl Scheduler for PctScheduler {
         Some(Schedule::new(self.data_source.reinitialize()))
     }
 
-    fn next_task(&mut self, runnable: &[&Task], current: Option<TaskId>, is_yielding: bool) -> Option<TaskId> {
+    fn next_task(
+        &mut self,
+        runnable: &[Rc<RefCell<Task>>],
+        current: Option<TaskId>,
+        is_yielding: bool,
+    ) -> Option<TaskId> {
         // If any new tasks were created, assign them priorities by randomly swapping them with an
         // existing task's priority, so we maintain the invariant that every priority is distinct
         let max_known_task = self.priorities.len();
-        let max_new_task = usize::from(runnable.iter().map(|t| t.id()).max().unwrap());
+        let max_new_task = usize::from(runnable.iter().map(|t| t.borrow().id()).max().unwrap());
         for new_task_id in max_known_task..1 + max_new_task {
             let new_task_id = TaskId::from(new_task_id);
             // Make sure there's a chance to give the new task the lowest priority
@@ -169,8 +176,9 @@ impl Scheduler for PctScheduler {
         Some(
             runnable
                 .iter()
-                .min_by_key(|t| self.priorities.get(&t.id()))
+                .min_by_key(|t| self.priorities.get(&t.borrow().id()))
                 .expect("priority queue invariant")
+                .borrow()
                 .id(),
         )
     }

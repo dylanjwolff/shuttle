@@ -6,6 +6,8 @@ use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use rand::{RngCore, SeedableRng};
 use rand_pcg::Pcg64Mcg;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// A scheduler that randomly chooses a runnable task at each context switch.
 ///
@@ -100,8 +102,13 @@ impl Scheduler for RandomScheduler {
         }
     }
 
-    fn next_task(&mut self, runnable: &[&Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
-        Some(runnable.choose(&mut self.rng).unwrap().id())
+    fn next_task(
+        &mut self,
+        runnable: &[Rc<RefCell<Task>>],
+        _current: Option<TaskId>,
+        _is_yielding: bool,
+    ) -> Option<TaskId> {
+        Some(runnable.choose(&mut self.rng).unwrap().borrow().id())
     }
 
     fn next_u64(&mut self) -> u64 {

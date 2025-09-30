@@ -1,6 +1,8 @@
 use crate::annotations::{record_random, record_schedule, start_annotations, stop_annotations};
 use crate::runtime::task::{Task, TaskId};
 use crate::scheduler::{Schedule, Scheduler};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// An `AnnotationScheduler` wraps an inner `Scheduler` and enables the
 /// creation of an annotated schedule (for use with Shuttle Explorer).
@@ -25,12 +27,14 @@ impl<S: Scheduler> Scheduler for AnnotationScheduler<S> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &[Rc<RefCell<Task>>],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
         let choice = self.0.next_task(runnable_tasks, current_task, is_yielding)?;
-        record_schedule(choice, runnable_tasks);
+        // Convert Rc<RefCell<Task>> to &Task for record_schedule
+        let task_refs: Vec<&Task> = runnable_tasks.iter().map(|task| unsafe { &*task.as_ptr() }).collect();
+        record_schedule(choice, &task_refs);
         Some(choice)
     }
 

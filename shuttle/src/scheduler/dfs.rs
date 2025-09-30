@@ -2,6 +2,8 @@ use crate::runtime::task::{Task, TaskId};
 use crate::scheduler::data::fixed::FixedDataSource;
 use crate::scheduler::data::DataSource;
 use crate::scheduler::{Schedule, Scheduler};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const DFS_RANDOM_SEED: u64 = 0x12345678;
 
@@ -66,15 +68,20 @@ impl Scheduler for DfsScheduler {
 
     // TODO should we respect `is_yielding` by not allowing `current` to be scheduled next? That
     // TODO would be unsound but perhaps useful for validating some code
-    fn next_task(&mut self, runnable: &[&Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+    fn next_task(
+        &mut self,
+        runnable: &[Rc<RefCell<Task>>],
+        _current: Option<TaskId>,
+        _is_yielding: bool,
+    ) -> Option<TaskId> {
         // Sort runnable tasks by TaskId to ensure stable ordering for DFS exploration
         // This is necessary because swap_remove operations can change the order of tasks in the vector
-        let mut sorted_runnable: Vec<&Task> = runnable.to_vec();
-        sorted_runnable.sort_unstable_by_key(|task| task.id());
+        let mut sorted_runnable: Vec<&Rc<RefCell<Task>>> = runnable.iter().collect();
+        sorted_runnable.sort_unstable_by_key(|task| task.borrow().id());
         let next = if self.steps >= self.levels.len() {
             // First time we've reached this level
             assert_eq!(self.steps, self.levels.len());
-            let to_run = sorted_runnable.first().unwrap().id();
+            let to_run = sorted_runnable.first().unwrap().borrow().id();
             self.levels.push((to_run, sorted_runnable.len() == 1));
             to_run
         } else {
@@ -88,8 +95,12 @@ impl Scheduler for DfsScheduler {
                     !was_last,
                     "if we are making a change, there should be another available option"
                 );
-                let next_idx = sorted_runnable.iter().position(|t| t.id() == last_choice).unwrap() + 1;
-                let next = sorted_runnable[next_idx].id();
+                let next_idx = sorted_runnable
+                    .iter()
+                    .position(|t| t.borrow().id() == last_choice)
+                    .unwrap()
+                    + 1;
+                let next = sorted_runnable[next_idx].borrow().id();
                 self.levels.drain(self.steps..);
                 self.levels.push((next, next_idx == sorted_runnable.len() - 1));
                 next

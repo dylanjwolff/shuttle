@@ -37,13 +37,13 @@ pub fn context_switches() -> usize {
 pub fn clock() -> VectorClock {
     ExecutionState::with(|state| {
         let me = state.current();
-        state.get_clock(me.id()).clone()
+        state.get_clock(me.id())
     })
 }
 
 /// Gets the clock for the thread with the given task ID
 pub fn clock_for(task_id: TaskId) -> VectorClock {
-    ExecutionState::with(|state| state.get_clock(task_id).clone())
+    ExecutionState::with(|state| state.get_clock(task_id))
 }
 
 /// Apply the given function to the Labels for the specified task

@@ -32,18 +32,20 @@ unsafe fn raw_waker_wake(data: *const ()) {
             return;
         }
 
-        let waiter = state.get(task_id);
+        let is_finished = {
+            let waiter = state.get(task_id);
+            waiter.finished()
+        };
 
-        if waiter.finished() {
+        if is_finished {
             return;
         }
 
-        let (task, runnable_tasks, num_runnable) = (
-            &mut state.tasks[task_id.0],
-            &mut state.schedulable_tasks,
-            &mut state.num_runnable,
-        );
-        task.wake(runnable_tasks, num_runnable);
+        let task = state.tasks[task_id.0].clone();
+        let should_add = task.borrow_mut().wake(&mut state.num_runnable);
+        if should_add {
+            state.schedulable_tasks.push(task);
+        }
     });
 }
 

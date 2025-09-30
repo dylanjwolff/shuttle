@@ -2,6 +2,8 @@ use crate::runtime::task::{Task, TaskId};
 use crate::scheduler::data::random::RandomDataSource;
 use crate::scheduler::data::DataSource;
 use crate::scheduler::{Schedule, Scheduler};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// A round robin scheduler that chooses the next available runnable task at each context switch.
 #[derive(Debug)]
@@ -33,17 +35,23 @@ impl Scheduler for RoundRobinScheduler {
         }
     }
 
-    fn next_task(&mut self, runnable: &[&Task], current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+    fn next_task(
+        &mut self,
+        runnable: &[Rc<RefCell<Task>>],
+        current: Option<TaskId>,
+        _is_yielding: bool,
+    ) -> Option<TaskId> {
         if current.is_none() {
-            return Some(runnable.first().unwrap().id());
+            return Some(runnable.first().unwrap().borrow().id());
         }
         let current = current.unwrap();
 
         Some(
             runnable
                 .iter()
-                .find(|t| t.id() > current)
+                .find(|t| t.borrow().id() > current)
                 .unwrap_or_else(|| runnable.first().unwrap())
+                .borrow()
                 .id(),
         )
     }

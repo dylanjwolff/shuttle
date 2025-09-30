@@ -3,9 +3,11 @@ use crate::scheduler::data::random::RandomDataSource;
 use crate::scheduler::data::DataSource;
 use crate::scheduler::serialization::deserialize_schedule;
 use crate::scheduler::{Schedule, ScheduleStep, Scheduler};
+use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::Path;
+use std::rc::Rc;
 use tracing::trace;
 
 /// A scheduler that can replay a chosen schedule deserialized from a string.
@@ -76,7 +78,12 @@ impl Scheduler for ReplayScheduler {
         }
     }
 
-    fn next_task(&mut self, runnable: &[&Task], _current: Option<TaskId>, _is_yielding: bool) -> Option<TaskId> {
+    fn next_task(
+        &mut self,
+        runnable: &[Rc<RefCell<Task>>],
+        _current: Option<TaskId>,
+        _is_yielding: bool,
+    ) -> Option<TaskId> {
         loop {
             if self.steps >= self.schedule.steps.len() {
                 assert!(self.allow_incomplete, "schedule ended early");
@@ -87,10 +94,10 @@ impl Scheduler for ReplayScheduler {
                     panic!("expected context switch but next schedule step is random choice");
                 }
                 ScheduleStep::Task(next) => {
-                    if let Some(task) = runnable.iter().find(|t| t.id() == next) {
+                    if let Some(task) = runnable.iter().find(|t| t.borrow().id() == next) {
                         self.steps += 1;
                         if let Some(target_clock) = &self.target_clock {
-                            if task.clock <= *target_clock {
+                            if task.borrow().clock <= *target_clock {
                                 // The target event causally depends on this
                                 // event, so we schedule it.
                                 return Some(next);

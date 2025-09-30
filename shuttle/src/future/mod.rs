@@ -67,7 +67,7 @@ impl AbortHandle {
             if !state.is_finished() {
                 let (task, num_unfinished_attached) =
                     (&mut state.tasks[self.task_id.0], &mut state.num_unfinished_attached);
-                task.abort(num_unfinished_attached);
+                task.borrow_mut().abort(num_unfinished_attached);
             }
         });
     }
@@ -116,7 +116,7 @@ impl<T> JoinHandle<T> {
             if !state.is_finished() {
                 let (task, num_unfinished_attached) =
                     (&mut state.tasks[self.task_id.0], &mut state.num_unfinished_attached);
-                task.abort(num_unfinished_attached);
+                task.borrow_mut().abort(num_unfinished_attached);
             }
         });
     }

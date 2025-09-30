@@ -265,12 +265,14 @@ impl BatchSemaphoreState {
                 assert!(waiter.is_queued.swap(false, Ordering::SeqCst));
                 assert!(!waiter.has_permits.swap(true, Ordering::SeqCst));
                 ExecutionState::with(|s| {
-                    let task = s.get_mut(waiter.task_id);
-                    assert!(!task.finished());
-                    // The acquiry is causally dependent on the event
-                    // which released the acquired permits.
-                    task.clock.update(&clock);
-                    let id = task.id();
+                    let id = {
+                        let mut task = s.get_mut(waiter.task_id);
+                        assert!(!task.finished());
+                        // The acquiry is causally dependent on the event
+                        // which released the acquired permits.
+                        task.clock.update(&clock);
+                        task.id()
+                    };
                     s.unblock_task(id);
                 });
                 let mut maybe_waker = waiter.waker.lock().unwrap();
@@ -570,8 +572,11 @@ impl BatchSemaphore {
                 for waiter in &mut state.waiters {
                     if waiter.num_permits <= num_available {
                         ExecutionState::with(|s| {
-                            let task = s.get(waiter.task_id);
-                            assert!(!task.finished());
+                            let is_finished = {
+                                let task = s.get(waiter.task_id);
+                                task.finished()
+                            };
+                            assert!(!is_finished);
                             s.unblock_task(waiter.task_id);
                         });
                         let maybe_waker = waiter.waker.lock().unwrap();

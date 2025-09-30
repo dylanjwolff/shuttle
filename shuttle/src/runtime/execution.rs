@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::panic::{self, Location};
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{trace, Span};
@@ -122,20 +121,24 @@ impl Execution {
                     // The scheduler decided we're finished, so there are either no runnable tasks,
                     // or all runnable tasks are detached and there are no unfinished attached
                     // tasks. Therefore, it's a deadlock if there are unfinished attached tasks.
-                    if state.tasks.iter().any(|t| !t.finished() && !t.detached) {
+                    if state
+                        .tasks
+                        .iter()
+                        .any(|t| !t.borrow().finished() && !t.borrow().detached)
+                    {
                         let blocked_tasks = state
                             .tasks
                             .iter()
-                            .filter(|t| !t.finished())
+                            .filter(|t| !t.borrow().finished())
                             .map(|t| {
                                 format!(
                                     "{} (task {:?}{}{}){}",
-                                    t.name().unwrap_or_else(|| "<unknown>".to_string()),
-                                    t.id(),
-                                    if t.detached { ", detached" } else { "" },
-                                    if t.sleeping() { ", pending future" } else { "" },
+                                    t.borrow().name().unwrap_or_else(|| "<unknown>".to_string()),
+                                    t.borrow().id(),
+                                    if t.borrow().detached { ", detached" } else { "" },
+                                    if t.borrow().sleeping() { ", pending future" } else { "" },
                                     if backtrace_enabled() {
-                                        format!("\nBacktrace:\n{:#?}\n", t.backtrace)
+                                        format!("\nBacktrace:\n{:#?}\n", t.borrow().backtrace)
                                     } else {
                                         "".into()
                                     }
@@ -252,7 +255,7 @@ impl Execution {
 pub(crate) struct ExecutionState {
     pub config: Config,
     // invariant: tasks are never removed from this list
-    pub(crate) tasks: SmallVec<[Pin<Box<Task>>; DEFAULT_INLINE_TASKS]>,
+    pub(crate) tasks: SmallVec<[Rc<RefCell<Task>>; DEFAULT_INLINE_TASKS]>,
     // invariant: if this transitions to Stopped or Finished, it can never change again
     current_task: ScheduledTask,
     // the task the scheduler has chosen to run next
@@ -278,10 +281,10 @@ pub(crate) struct ExecutionState {
     // The `Span` which the `ExecutionState` was created under. Will be the parent of all `Task` `Span`s
     pub(crate) top_level_span: Span,
 
-    // Persistent Vec used as a bump allocator for references to runnable tasks to avoid slow allocation
+    // Persistent Vec used as a bump allocator for Rc references to runnable tasks to avoid slow allocation
     // on each scheduling decision. Should not be used outside of the `schedule` function
-    pub(crate) schedulable_tasks: Vec<*const Task>,
-    pub(crate) runnable_tasks_correct: Vec<*const Task>,
+    pub(crate) schedulable_tasks: Vec<Rc<RefCell<Task>>>,
+    pub(crate) runnable_tasks_correct: Vec<Rc<RefCell<Task>>>,
     pub(crate) num_unfinished_attached: u32,
     pub(crate) num_runnable: u32,
 }
@@ -427,10 +430,8 @@ impl ExecutionState {
                 None,
                 TaskSignature::new_parentless(caller),
             );
-            state.tasks.push(Box::pin(task));
-            state
-                .schedulable_tasks
-                .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.tasks.push(Rc::new(RefCell::new(task)));
+            state.schedulable_tasks.push(state.tasks[task_id.0].clone());
             state.num_unfinished_attached += 1;
             state.num_runnable += 1;
 
@@ -462,8 +463,19 @@ impl ExecutionState {
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
-            let clock = state.increment_clock_mut(); // Increment the parent's clock
-            clock.extend(task_id); // and extend it with an entry for the new task
+            let clock = state.increment_clock(); // Increment the parent's clock
+            let mut extended_clock = clock.clone();
+            extended_clock.extend(task_id); // and extend it with an entry for the new task
+            let clock = extended_clock;
+
+            // Also extend the parent's clock to include the new task ID
+            state.current_mut().clock.extend(task_id);
+
+            let (current_parent_id, new_signature) = {
+                let current_id = state.current().id();
+                let signature = state.current_mut().signature.new_child(caller);
+                (Some(current_id), signature)
+            };
 
             let task = Task::from_future(
                 future,
@@ -474,14 +486,12 @@ impl ExecutionState {
                 parent_span_id,
                 schedule_len,
                 tag,
-                Some(state.current().id()),
-                state.current_mut().signature.new_child(caller),
+                current_parent_id,
+                new_signature,
             );
 
-            state.tasks.push(Box::pin(task));
-            state
-                .schedulable_tasks
-                .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.tasks.push(Rc::new(RefCell::new(task)));
+            state.schedulable_tasks.push(state.tasks[task_id.0].clone());
             state.num_unfinished_attached += 1;
             state.num_runnable += 1;
 
@@ -497,7 +507,7 @@ impl ExecutionState {
         f: Box<dyn FnOnce() + 'static>,
         stack_size: usize,
         name: Option<String>,
-        mut initial_clock: Option<VectorClock>,
+        initial_clock: Option<VectorClock>,
         caller: &'static Location<'static>,
     ) -> TaskId {
         let task_id = Self::with(|state| {
@@ -507,16 +517,27 @@ impl ExecutionState {
 
             Self::set_labels_for_new_task(state, task_id, name.clone());
 
-            let clock = if let Some(ref mut clock) = initial_clock {
+            let using_initial_clock = initial_clock.is_some();
+            let mut clock = if let Some(clock) = initial_clock {
                 clock
             } else {
                 // Inherit the clock of the parent thread (which spawned this task)
-                state.increment_clock_mut()
+                state.increment_clock()
             };
             clock.extend(task_id); // and extend it with an entry for the new thread
-            let clock = clock.clone();
+
+            // Also extend the parent's clock to include the new task ID (unless using provided initial_clock)
+            if !using_initial_clock {
+                state.current_mut().clock.extend(task_id);
+            }
 
             let schedule_len = state.current_schedule.len();
+
+            let (current_parent_id, new_signature) = {
+                let current_id = state.current().id();
+                let signature = state.current_mut().signature.new_child(caller);
+                (Some(current_id), signature)
+            };
 
             let task = Task::from_closure(
                 f,
@@ -527,13 +548,11 @@ impl ExecutionState {
                 parent_span_id,
                 schedule_len,
                 tag,
-                Some(state.current().id()),
-                state.current_mut().signature.new_child(caller),
+                current_parent_id,
+                new_signature,
             );
-            state.tasks.push(Box::pin(task));
-            state
-                .schedulable_tasks
-                .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.tasks.push(Rc::new(RefCell::new(task)));
+            state.schedulable_tasks.push(state.tasks[task_id.0].clone());
             state.num_unfinished_attached += 1;
             state.num_runnable += 1;
 
@@ -553,15 +572,20 @@ impl ExecutionState {
         let (mut tasks, final_state) = Self::with(|state| {
             state.in_cleanup = true;
             assert!(state.current_task == ScheduledTask::Stopped || state.current_task == ScheduledTask::Finished);
+            // Clear schedulable_tasks and runnable_tasks_correct to release task references before cleanup
+            state.schedulable_tasks.clear();
+            state.runnable_tasks_correct.clear();
             (std::mem::replace(&mut state.tasks, SmallVec::new()), state.current_task)
         });
 
         for task in tasks.drain(..) {
             assert!(
-                final_state == ScheduledTask::Stopped || task.finished() || task.detached,
+                final_state == ScheduledTask::Stopped || task.borrow().finished() || task.borrow().detached,
                 "execution finished but task is not"
             );
-            let task = Pin::into_inner(task);
+            // task is now an Rc<RefCell<Task>>, no Pin::into_inner needed
+            let inner_task = Rc::try_unwrap(task).expect("couldn't unwrap task Rc");
+            let task = inner_task.into_inner();
             Rc::try_unwrap(task.continuation)
                 .map_err(|_| ())
                 .expect("couldn't cleanup a future");
@@ -656,28 +680,28 @@ impl ExecutionState {
         })
     }
 
-    pub(crate) fn current(&self) -> &Task {
+    pub(crate) fn current(&self) -> std::cell::Ref<Task> {
         self.get(self.current_task.id().unwrap())
     }
 
-    pub(crate) fn current_mut(&mut self) -> &mut Task {
+    pub(crate) fn current_mut(&mut self) -> std::cell::RefMut<Task> {
         self.get_mut(self.current_task.id().unwrap())
     }
 
-    pub(crate) fn try_current(&self) -> Option<&Task> {
+    pub(crate) fn try_current(&self) -> Option<std::cell::Ref<Task>> {
         self.try_get(self.current_task.id()?)
     }
 
-    pub(crate) fn get(&self, id: TaskId) -> &Task {
-        self.try_get(id).unwrap()
+    pub(crate) fn get(&self, id: TaskId) -> std::cell::Ref<Task> {
+        self.tasks.get(id.0).unwrap().borrow()
     }
 
-    pub(crate) fn get_mut(&mut self, id: TaskId) -> &mut Task {
-        self.tasks.get_mut(id.0).unwrap()
+    pub(crate) fn get_mut(&mut self, id: TaskId) -> std::cell::RefMut<Task> {
+        self.tasks.get(id.0).unwrap().borrow_mut()
     }
 
-    pub(crate) fn try_get(&self, id: TaskId) -> Option<&Task> {
-        self.tasks.get(id.0).map(|t| t.as_ref().get_ref())
+    pub(crate) fn try_get(&self, id: TaskId) -> Option<std::cell::Ref<Task>> {
+        self.tasks.get(id.0).map(|t| t.borrow())
     }
 
     pub(crate) fn in_cleanup(&self) -> bool {
@@ -698,33 +722,24 @@ impl ExecutionState {
         self.storage.init(key.into(), value);
     }
 
-    pub(crate) fn get_clock(&self, id: TaskId) -> &VectorClock {
-        &self.tasks.get(id.0).unwrap().clock
-    }
-
-    pub(crate) fn get_clock_mut(&mut self, id: TaskId) -> &mut VectorClock {
-        &mut self.tasks.get_mut(id.0).unwrap().clock
+    pub(crate) fn get_clock(&self, id: TaskId) -> VectorClock {
+        self.tasks.get(id.0).unwrap().borrow().clock.clone()
     }
 
     /// Increment the current thread's clock entry and update its clock with the one provided.
     pub(crate) fn update_clock(&mut self, clock: &VectorClock) {
-        let task = self.current_mut();
-        task.clock.increment(task.id);
+        let mut task = self.current_mut();
+        let task_id = task.id;
+        task.clock.increment(task_id);
         task.clock.update(clock);
     }
 
-    /// Increment the current thread's clock and return a shared reference to it
-    pub(crate) fn increment_clock(&mut self) -> &VectorClock {
-        let task = self.current_mut();
-        task.clock.increment(task.id);
-        &task.clock
-    }
-
-    /// Increment the current thread's clock and return a mutable reference to it
-    pub(crate) fn increment_clock_mut(&mut self) -> &mut VectorClock {
-        let task = self.current_mut();
-        task.clock.increment(task.id);
-        &mut task.clock
+    /// Increment the current thread's clock and return a clone of it
+    pub(crate) fn increment_clock(&mut self) -> VectorClock {
+        let mut task = self.current_mut();
+        let task_id = task.id;
+        task.clock.increment(task_id);
+        task.clock.clone()
     }
 
     /// Returns `true` if the test has exceeded the step bound, and `false` otherwise.
@@ -739,7 +754,15 @@ impl ExecutionState {
             &mut self.schedulable_tasks,
             &mut self.num_runnable,
         );
-        task.block(allow_spurious_wakeups, runnable_tasks, num_runnable);
+        let should_remove = task.borrow_mut().block(allow_spurious_wakeups, num_runnable);
+        if should_remove {
+            let task_id = task.borrow().id();
+            let pos = runnable_tasks
+                .iter()
+                .position(|t| t.borrow().id() == task_id)
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
+        }
     }
 
     /// Block a specific task with split borrow
@@ -749,7 +772,15 @@ impl ExecutionState {
             &mut self.schedulable_tasks,
             &mut self.num_runnable,
         );
-        task.block(allow_spurious_wakeups, runnable_tasks, num_runnable);
+        let should_remove = task.borrow_mut().block(allow_spurious_wakeups, num_runnable);
+        if should_remove {
+            let task_id = task.borrow().id();
+            let pos = runnable_tasks
+                .iter()
+                .position(|t| t.borrow().id() == task_id)
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
+        }
     }
 
     /// Unblock a specific task with split borrow
@@ -759,7 +790,10 @@ impl ExecutionState {
             &mut self.schedulable_tasks,
             &mut self.num_runnable,
         );
-        task.unblock(runnable_tasks, num_runnable);
+        let should_add = task.borrow_mut().unblock(num_runnable);
+        if should_add {
+            runnable_tasks.push(task.clone());
+        }
     }
 
     /// Finish the current task with split borrow
@@ -770,7 +804,15 @@ impl ExecutionState {
             &mut self.num_unfinished_attached,
             &mut self.num_runnable,
         );
-        task.finish(runnable_tasks, num_unfinished_attached, num_runnable);
+        let should_remove = task.borrow_mut().finish(num_unfinished_attached, num_runnable);
+        if should_remove {
+            let task_id = task.borrow().id();
+            let pos = runnable_tasks
+                .iter()
+                .position(|t| t.borrow().id() == task_id)
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
+        }
     }
 
     /// Make current task pending unless woken with split borrow
@@ -780,7 +822,15 @@ impl ExecutionState {
             &mut self.schedulable_tasks,
             &mut self.num_runnable,
         );
-        task.sleep_unless_woken(runnable_tasks, num_runnable);
+        let should_remove = task.borrow_mut().sleep_unless_woken(num_runnable);
+        if should_remove {
+            let task_id = task.borrow().id();
+            let pos = runnable_tasks
+                .iter()
+                .position(|t| t.borrow().id() == task_id)
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
+        }
     }
 
     /// Park the current task with split borrow
@@ -790,7 +840,16 @@ impl ExecutionState {
             &mut self.schedulable_tasks,
             &mut self.num_runnable,
         );
-        task.park(runnable_tasks, num_runnable)
+        let (should_remove, did_block) = task.borrow_mut().park(num_runnable);
+        if should_remove {
+            let task_id = task.borrow().id();
+            let pos = runnable_tasks
+                .iter()
+                .position(|t| t.borrow().id() == task_id)
+                .expect("ID not found");
+            runnable_tasks.swap_remove(pos);
+        }
+        did_block
     }
 
     /// Unpark a specific task with split borrow
@@ -800,7 +859,10 @@ impl ExecutionState {
             &mut self.schedulable_tasks,
             &mut self.num_runnable,
         );
-        task.unpark(runnable_tasks, num_runnable);
+        let should_add = task.borrow_mut().unpark(num_runnable);
+        if should_add {
+            runnable_tasks.push(task.clone());
+        }
     }
 
     fn debug_runnable_ok(&mut self) -> bool {
@@ -808,31 +870,40 @@ impl ExecutionState {
         let mut any_runnable = false;
 
         for task in &self.tasks {
-            unfinished_attached |= !task.finished() && !task.detached;
-            let is_runnable = task.runnable();
+            let task_borrow = task.borrow();
+            unfinished_attached |= !task_borrow.finished() && !task_borrow.detached;
+            let is_runnable = task_borrow.runnable();
             any_runnable |= is_runnable;
 
             if is_runnable {
-                self.runnable_tasks_correct.push(task.as_ref().get_ref() as *const Task);
-            } else if task.can_spuriously_wakeup() {
+                self.runnable_tasks_correct.push(task.clone());
+            } else if task_borrow.can_spuriously_wakeup() {
                 // Some blocked tasks can be woken up spuriously, even though the condition the task is
                 // blocked on hasn't happened yet. We'll add such tasks to the list of runnable tasks, but
                 // they won't contribute to the check on `any_runnable`; if the only runnable tasks
                 // are ones that are waiting for a potential spurious wakeup, it should still be treated as
                 // a deadlock since there's no guarantee that spurious wakeups will ever occur.
-                self.runnable_tasks_correct.push(task.as_ref().get_ref() as *const Task);
+                self.runnable_tasks_correct.push(task.clone());
             }
         }
 
         if self.schedulable_tasks.len() != self.runnable_tasks_correct.len() {
             trace!("mismatch schedule");
-
-            let task_refs_correct =
-                unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.runnable_tasks_correct) };
-            let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.schedulable_tasks) };
-            trace!("{:?}", task_refs);
+            trace!(
+                "schedulable_tasks: {:?}",
+                self.schedulable_tasks
+                    .iter()
+                    .map(|t| t.borrow().id())
+                    .collect::<Vec<_>>()
+            );
             trace!("-------------------------\n\n");
-            trace!("{:?}", task_refs_correct);
+            trace!(
+                "runnable_tasks_correct: {:?}",
+                self.runnable_tasks_correct
+                    .iter()
+                    .map(|t| t.borrow().id())
+                    .collect::<Vec<_>>()
+            );
         }
         assert_eq!(
             self.schedulable_tasks.len(),
@@ -850,8 +921,6 @@ impl ExecutionState {
         trace!("any_runnable: {} {}", any_runnable, self.num_runnable);
         assert!(any_runnable || self.num_runnable == 0);
         assert!(!any_runnable || self.num_runnable != 0);
-
-
 
         // Retains the capacity of `runnable_tasks_correct` for future calls of `schedule`
         self.runnable_tasks_correct.clear();
@@ -899,18 +968,11 @@ impl ExecutionState {
 
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
 
-        // Cast the slice of raw pointers to a slice of references in place to provide schedulers with a safe API
-        //
-        // SAFETY: This is safe because the tasks themselves are only being accessed through this shared reference by the
-        // schedulers, and all references are always cleared from the runnable_tasks_correct Vec at the end of this function.
-        // The transmute itself is safe because *const and & have the same layout, and the pointer is created from a
-        // reference earlier in this function.
-        let task_refs = unsafe { std::mem::transmute::<&[*const Task], &[&Task]>(&self.schedulable_tasks) };
-
+        // Pass the Rc<RefCell<Task>> slice directly to the scheduler - no unsafe code needed!
         self.next_task = self
             .scheduler
             .borrow_mut()
-            .next_task(task_refs, self.current_task.id(), is_yielding)
+            .next_task(&self.schedulable_tasks, self.current_task.id(), is_yielding)
             .map(ScheduledTask::Some)
             .unwrap_or(ScheduledTask::Stopped);
 
@@ -926,7 +988,7 @@ impl ExecutionState {
             trace!(
                 i=self.current_schedule.len(),
                 next_task=?self.next_task,
-                runnable=?task_refs.iter().map(|task| task.id()).collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>(),
+                runnable=?self.schedulable_tasks.iter().map(|task| task.borrow().id()).collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>(),
                 "scheduling decision"
             );
         });
@@ -934,10 +996,13 @@ impl ExecutionState {
         // If the task chosen by the scheduler is blocked, then it should be one that can be
         // spuriously woken up, and we need to unblock it here so that it can execute.
         if let Some(tid) = self.next_task.id() {
-            let task = self.get(tid);
-            assert!(task.runnable() || task.blocked());
-            if task.blocked() {
-                assert!(task.can_spuriously_wakeup());
+            let (is_runnable, is_blocked, can_spuriously_wakeup) = {
+                let task = self.get(tid);
+                (task.runnable(), task.blocked(), task.can_spuriously_wakeup())
+            };
+            assert!(is_runnable || is_blocked);
+            if is_blocked {
+                assert!(can_spuriously_wakeup);
                 self.unblock_task(tid);
             }
         }

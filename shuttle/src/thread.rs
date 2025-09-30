@@ -232,7 +232,8 @@ where
     // scheduler.
     *result.lock().unwrap() = Some(Ok(ret));
     ExecutionState::with(|state| {
-        if let Some(waiter) = state.current_mut().take_waiter() {
+        let waiter = state.current_mut().take_waiter();
+        if let Some(waiter) = waiter {
             state.unblock_task(waiter);
         }
     });
@@ -284,8 +285,11 @@ impl<T> JoinHandle<T> {
     pub fn join(self) -> Result<T> {
         ExecutionState::with(|state| {
             let me = state.current().id();
-            let target = state.get_mut(self.task_id);
-            if target.set_waiter(me) {
+            let should_block = {
+                let mut target = state.get_mut(self.task_id);
+                target.set_waiter(me)
+            };
+            if should_block {
                 state.block_current(false);
             }
         });
@@ -295,8 +299,10 @@ impl<T> JoinHandle<T> {
 
         // Waiting thread inherits the clock of the finished thread
         ExecutionState::with(|state| {
-            let target = state.get_mut(self.task_id);
-            let clock = target.clock.clone();
+            let clock = {
+                let target = state.get_mut(self.task_id);
+                target.clock.clone()
+            };
             state.update_clock(&clock);
         });
 

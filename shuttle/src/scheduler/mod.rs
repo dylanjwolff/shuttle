@@ -1,5 +1,7 @@
 //! Implementations of different scheduling strategies for concurrency testing.
+use std::cell::RefCell;
 use std::fmt::Debug;
+use std::rc::Rc;
 
 mod annotation;
 mod data;
@@ -103,7 +105,7 @@ pub trait Scheduler {
     /// execution has not yet begun.
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &[Rc<RefCell<Task>>],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId>;
@@ -119,7 +121,7 @@ impl Scheduler for Box<dyn Scheduler + Send> {
 
     fn next_task(
         &mut self,
-        runnable_tasks: &[&Task],
+        runnable_tasks: &[Rc<RefCell<Task>>],
         current_task: Option<TaskId>,
         is_yielding: bool,
     ) -> Option<TaskId> {
