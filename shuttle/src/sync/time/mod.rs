@@ -12,11 +12,13 @@ use std::pin::Pin;
 use pin_project::pin_project;
 use std::task::{Context, Poll, Waker};
 
+use crate::current::Labels;
 use crate::runtime::execution::ExecutionState;
 
 use crate::runtime::thread;
 
 pub mod constant_stepped;
+pub mod frozen;
 
 /// A distribution of times which can be sampled
 pub trait TimeDistribution<D> {
@@ -26,8 +28,6 @@ pub trait TimeDistribution<D> {
 
 /// The trait implemented by each TimeModel
 pub trait TimeModel: std::fmt::Debug {
-    /// sleep
-    fn sleep(&mut self, duration: Duration);
     /// wake the next sleeping task if all tasks are blocked; returns true if exists task was able to be woken
     fn wake_next(&mut self) -> bool;
     /// reset
@@ -42,12 +42,25 @@ pub trait TimeModel: std::fmt::Debug {
     fn resume(&mut self);
     /// advance
     fn advance(&mut self, duration: Duration);
-    /// poll timeout
-    fn poll_timeout_is_expired(&mut self, deadline: Instant, waker: Option<Waker>) -> bool;
+    /// register a sleep/timeout on the current task
+    fn register_sleep(&mut self, deadline: Instant, waker: Option<Waker>) -> bool;
+    /// downcast to Any for type checking
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// trigger timeouts for tasks matching the given predicate
+    fn trigger_timeouts(&mut self, trigger: Box<dyn Fn(&Labels) -> bool>);
 }
 
 fn get_time_model() -> Rc<RefCell<dyn TimeModel>> {
     ExecutionState::with(|s| Rc::clone(&s.time_model))
+}
+
+/// Expire all current timeouts/sleeps requested by tasks whose tags match the
+/// given predicate. May not be implemented by all TimeModels.
+pub fn trigger_timeouts<F>(trigger: F)
+where
+    F: Fn(&Labels) -> bool + 'static,
+{
+    get_time_model().borrow_mut().trigger_timeouts(Box::new(trigger));
 }
 
 /// A Shuttle duration
@@ -285,10 +298,11 @@ impl PartialOrd for Instant {
 /// Puts the current thread to sleep
 /// Behavior of this function depends on the TimeModel provided to Shuttle
 pub fn sleep(dur: Duration) {
-    ExecutionState::with(|s| Rc::clone(&s.time_model))
-        .borrow_mut()
-        .sleep(dur);
-    thread::switch();
+    if dur == Duration::ZERO {
+        thread::switch();
+        return;
+    }
+    crate::future::block_on(async_sleep(dur));
 }
 
 /// Advances the current global time without putting the current thread to sleep
@@ -301,19 +315,19 @@ pub fn advance(dur: Duration) {
 }
 
 /// Returns a future which sleeps until the duration has elapsed
-pub fn tokio_sleep(dur: Duration) -> Sleep {
+pub fn async_sleep(dur: Duration) -> Sleep {
     Sleep {
         deadline: Instant::now().checked_add(dur).unwrap(),
     }
 }
 
 /// Returns a future which sleeps until the deadline is reached
-pub fn tokio_sleep_until(deadline: Instant) -> Sleep {
+pub fn async_sleep_until(deadline: Instant) -> Sleep {
     Sleep { deadline }
 }
 
-/// Tokio interval
-pub fn tokio_interval(dur: Duration) -> Interval {
+/// Async interval
+pub fn async_interval(dur: Duration) -> Interval {
     Interval {
         start: None,
         ticks: 0,
@@ -322,8 +336,8 @@ pub fn tokio_interval(dur: Duration) -> Interval {
     }
 }
 
-/// Tokio interval
-pub fn tokio_interval_at(start: Instant, period: Duration) -> Interval {
+/// Async interval
+pub fn async_interval_at(start: Instant, period: Duration) -> Interval {
     Interval {
         start: Some(start),
         ticks: 0,
@@ -343,12 +357,14 @@ impl Future for Sleep {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let is_expired = get_time_model()
-            .borrow_mut()
-            .poll_timeout_is_expired(self.deadline, Some(cx.waker().clone()));
+        let is_expired = get_time_model().borrow_mut().register_sleep(self.deadline, None);
+        println!("sleep poll (is expired {})", is_expired);
         if is_expired {
             Poll::Ready(())
         } else {
+            let _ = get_time_model()
+                .borrow_mut()
+                .register_sleep(self.deadline, Some(cx.waker().clone()));
             Poll::Pending
         }
     }
@@ -388,7 +404,9 @@ impl Interval {
     /// tick
     pub async fn tick(&mut self) -> Instant {
         let deadline = self.next_deadline();
-        tokio_sleep_until(deadline).await;
+        println!("tick sleep until {:?}", deadline);
+        async_sleep_until(deadline).await;
+        println!("tick sleep done");
         self.ticks += 1;
         deadline
     }
@@ -409,7 +427,7 @@ impl Interval {
     pub fn poll_tick(&mut self, cx: &mut Context<'_>) -> Poll<Instant> {
         let deadline = self.next_deadline();
         if self.current_interval.is_none() {
-            self.current_interval = Some(Box::pin(tokio_sleep_until(deadline)));
+            self.current_interval = Some(Box::pin(async_sleep_until(deadline)));
         }
 
         match self.current_interval.as_mut().unwrap().as_mut().poll(cx) {
@@ -432,7 +450,7 @@ impl Interval {
 }
 
 /// Timeout a future
-pub fn tokio_timeout<F>(d: Duration, f: F) -> Timeout<F>
+pub fn async_timeout<F>(d: Duration, f: F) -> Timeout<F>
 where
     F: Future,
 {
@@ -469,7 +487,7 @@ where
         println!("timeout poll {:?}", this.deadline);
 
         let tm = get_time_model();
-        let expired = tm.borrow_mut().poll_timeout_is_expired(*this.deadline, None);
+        let expired = tm.borrow_mut().register_sleep(*this.deadline, None);
         if expired {
             return Poll::Ready(Err(Elapsed));
         }
@@ -477,9 +495,7 @@ where
         match this.future.poll(cx) {
             Poll::Pending => {
                 println!("2nd timeout poll");
-                let expired = tm
-                    .borrow_mut()
-                    .poll_timeout_is_expired(*this.deadline, Some(cx.waker().clone()));
+                let expired = tm.borrow_mut().register_sleep(*this.deadline, Some(cx.waker().clone()));
                 if expired {
                     return Poll::Ready(Err(Elapsed));
                 }

@@ -3,10 +3,7 @@ use crate::runtime::task::{Task, TaskId};
 use crate::runtime::thread::continuation::{ContinuationPool, CONTINUATION_POOL};
 use crate::scheduler::metrics::MetricsScheduler;
 use crate::scheduler::{Schedule, Scheduler};
-use crate::sync::time::{
-    constant_stepped::{ConstantSteppedTimeModel, ConstantTimeDistribution},
-    TimeModel,
-};
+use crate::sync::time::{frozen::FrozenTimeModel, TimeModel};
 use crate::Config;
 use std::cell::RefCell;
 use std::fmt;
@@ -62,16 +59,14 @@ pub struct Runner<S: ?Sized + Scheduler, T: TimeModel> {
     config: Config,
 }
 
-impl<S: Scheduler + 'static> Runner<S, ConstantSteppedTimeModel> {
+impl<S: Scheduler + 'static> Runner<S, FrozenTimeModel> {
     /// Construct a new `Runner` that will use the given `Scheduler` to control the test.
     pub fn new(scheduler: S, config: Config) -> Self {
         let metrics_scheduler = MetricsScheduler::new(scheduler);
 
         Self {
             scheduler: Rc::new(RefCell::new(metrics_scheduler)),
-            time_model: Rc::new(RefCell::new(ConstantSteppedTimeModel::new(
-                ConstantTimeDistribution::new(std::time::Duration::from_micros(10)),
-            ))),
+            time_model: Rc::new(RefCell::new(FrozenTimeModel::new())),
             config,
         }
     }

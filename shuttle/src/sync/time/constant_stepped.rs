@@ -2,7 +2,7 @@
 
 use std::{
     cmp::{max, Reverse},
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap},
     task::Waker,
 };
 
@@ -18,7 +18,8 @@ pub struct ConstantSteppedTimeModel {
     distribution: ConstantTimeDistribution,
     current_step_size: std::time::Duration,
     current_time_elapsed: std::time::Duration,
-    waiters: BinaryHeap<Reverse<(std::time::Duration, DeadlineWaker)>>,
+    waiters: BinaryHeap<Reverse<(std::time::Duration, TaskId)>>,
+    wakers: HashMap<(std::time::Duration, TaskId), Waker>,
 }
 
 unsafe impl Send for ConstantSteppedTimeModel {}
@@ -31,57 +32,37 @@ impl ConstantSteppedTimeModel {
             current_step_size: distribution.sample(),
             current_time_elapsed: std::time::Duration::from_secs(0),
             waiters: BinaryHeap::new(),
+            wakers: HashMap::new(),
         }
     }
 
     fn unblock_expired(&mut self) {
-        while let Some(waker) = self.waiters.peek().and_then(|Reverse((t, waker))| {
+        while let Some(waker_key) = self.waiters.peek().and_then(|Reverse((t, task_id))| {
             if *t <= self.current_time_elapsed {
-                Some(waker.clone())
+                Some((*t, *task_id))
             } else {
                 None
             }
         }) {
             _ = self.waiters.pop();
-            match waker {
-                DeadlineWaker::SyncSleep(id) => ExecutionState::with(|state| state.get_mut(id).unblock()),
-                DeadlineWaker::AsyncWaker(_, w) => w.wake(),
+            println!("remove {:?} from {:?}", waker_key, self.wakers);
+            if let Some(waker) = self.wakers.remove(&waker_key) {
+                waker.wake();
             }
         }
     }
-}
 
-#[derive(Debug, Clone)]
-enum DeadlineWaker {
-    SyncSleep(TaskId),
-    AsyncWaker(TaskId, Waker),
-}
-
-impl PartialEq for DeadlineWaker {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (DeadlineWaker::SyncSleep(a), DeadlineWaker::SyncSleep(b)) => a == b,
-            (DeadlineWaker::AsyncWaker(a, _), DeadlineWaker::AsyncWaker(b, _)) => a == b,
-            _ => false,
-        }
+    /// Get the currently sleeping tasks and deadlines. May contain duplicates
+    pub fn get_waiters(&self) -> &[Reverse<(std::time::Duration, TaskId)>] {
+        self.waiters.as_slice()
     }
-}
 
-impl Eq for DeadlineWaker {}
-
-impl PartialOrd for DeadlineWaker {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for DeadlineWaker {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (self, other) {
-            (DeadlineWaker::SyncSleep(a), DeadlineWaker::SyncSleep(b))
-            | (DeadlineWaker::AsyncWaker(a, _), DeadlineWaker::AsyncWaker(b, _))
-            | (DeadlineWaker::SyncSleep(a), DeadlineWaker::AsyncWaker(b, _))
-            | (DeadlineWaker::AsyncWaker(a, _), DeadlineWaker::SyncSleep(b)) => a.cmp(b),
+    /// Manually wake a task without affecting the global clock
+    pub fn wake_frozen(&mut self, deadline: std::time::Duration, task_id: TaskId) {
+        println!("try wake frozen {:?} {:?}", deadline, task_id);
+        if let Some(waker) = self.wakers.remove(&(deadline, task_id)) {
+            println!("wake frozen {:?} {:?}", deadline, task_id);
+            waker.wake();
         }
     }
 }
@@ -95,22 +76,6 @@ impl TimeModel for ConstantSteppedTimeModel {
         warn!("Resuming stepped model has no effect")
     }
 
-    fn sleep(&mut self, duration: Duration) {
-        debug!("sleep");
-        let duration = duration.unwrap_std();
-
-        if duration == std::time::Duration::from_secs(0) {
-            return;
-        }
-        let wake_time = self.current_time_elapsed + duration;
-        let item = (
-            wake_time,
-            DeadlineWaker::SyncSleep(ExecutionState::with(|s| s.current().id())),
-        );
-        self.waiters.push(Reverse(item));
-        ExecutionState::with(|s| s.current_mut().block(false));
-    }
-
     fn step(&mut self) {
         debug!("step");
         self.current_time_elapsed += self.current_step_size;
@@ -121,6 +86,7 @@ impl TimeModel for ConstantSteppedTimeModel {
         self.current_step_size = self.distribution.sample();
         self.current_time_elapsed = std::time::Duration::from_secs(0);
         self.waiters.clear();
+        self.wakers.clear();
     }
 
     fn instant(&self) -> Instant {
@@ -130,7 +96,7 @@ impl TimeModel for ConstantSteppedTimeModel {
     fn wake_next(&mut self) -> bool {
         println!("wake next {:?}", self.waiters.peek());
         println!("wake next {:?}", self.waiters);
-        if self.waiters.len() == 0 {
+        if self.waiters.is_empty() {
             return false;
         }
         if let Some(Reverse((time, _))) = self.waiters.peek() {
@@ -144,18 +110,28 @@ impl TimeModel for ConstantSteppedTimeModel {
         self.current_time_elapsed += dur.unwrap_std();
     }
 
-    fn poll_timeout_is_expired(&mut self, deadline: Instant, waker: Option<Waker>) -> bool {
+    fn register_sleep(&mut self, deadline: Instant, waker: Option<Waker>) -> bool {
         let deadline = deadline.unwrap_simulated();
         if deadline <= self.current_time_elapsed {
             return true;
         }
 
         if let Some(waker) = waker {
+            println!("register sleep {:?} {:?}", deadline, waker);
             let id = ExecutionState::with(|s| s.current().id());
-            let item = (deadline, DeadlineWaker::AsyncWaker(id, waker));
+            let item = (deadline, id);
             self.waiters.push(Reverse(item));
+            self.wakers.insert(item, waker);
         }
         false
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn trigger_timeouts(&mut self, _trigger: Box<dyn Fn(&crate::current::Labels) -> bool>) {
+        warn!("trigger_timeouts is not supported by ConstantSteppedTimeModel");
     }
 }
 
