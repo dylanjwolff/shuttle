@@ -346,10 +346,12 @@ impl ExecutionState {
     /// access to the state of the execution to influence scheduling (e.g. to register a task as
     /// blocked).
     #[inline]
+    #[track_caller]
     pub(crate) fn with<F, T>(f: F) -> T
     where
         F: FnOnce(&mut ExecutionState) -> T,
     {
+        trace!("ExecutionState::with from {}", Location::caller());
         Self::try_with(f).expect("Shuttle internal error: cannot access ExecutionState. are you trying to access a Shuttle primitive from outside a Shuttle test?")
     }
 

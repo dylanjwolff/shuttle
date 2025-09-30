@@ -18,7 +18,7 @@ use super::{
 #[derive(Clone, Debug)]
 pub struct FrozenTimeModel {
     inner: ConstantSteppedTimeModel,
-    expired: HashSet<(std::time::Duration, TaskId)>,
+    expired: HashSet<TaskId>,
 }
 
 unsafe impl Send for FrozenTimeModel {}
@@ -27,6 +27,30 @@ impl FrozenTimeModel {
     /// Create a new Frozen time model
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Expire all timeouts on tasks that satisfy a predicate
+    pub fn trigger_timeouts<F>(&mut self, trigger: F)
+    where
+        F: Fn(&Labels) -> bool + 'static,
+    {
+        let mut to_wake = Vec::new();
+        for Reverse((deadline, task_id)) in self.inner.get_waiters() {
+            with_labels_for_task(*task_id, |labels| {
+                if trigger(labels) {
+                    to_wake.push((*deadline, *task_id));
+                }
+                self.expired.insert(*task_id);
+            })
+        }
+        for (deadline, task_id) in to_wake {
+            self.inner.wake_frozen(deadline, task_id);
+        }
+    }
+
+    /// Clear all triggers that expire timeouts
+    pub fn clear_triggers(&mut self) {
+        self.expired.clear();
     }
 }
 
@@ -69,8 +93,7 @@ impl TimeModel for FrozenTimeModel {
 
     fn register_sleep(&mut self, deadline: Instant, waker: Option<Waker>) -> bool {
         let task_id = ExecutionState::me();
-        let std_deadline = deadline.unwrap_simulated();
-        if !self.expired.contains(&(std_deadline, task_id)) {
+        if !self.expired.contains(&task_id) {
             self.inner.register_sleep(deadline, waker)
         } else {
             true
@@ -79,20 +102,5 @@ impl TimeModel for FrozenTimeModel {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
-    }
-
-    fn trigger_timeouts(&mut self, trigger: Box<dyn Fn(&Labels) -> bool>) {
-        let mut to_wake = Vec::new();
-        for Reverse((deadline, task_id)) in self.inner.get_waiters() {
-            with_labels_for_task(*task_id, |labels| {
-                if trigger(labels) {
-                    to_wake.push((*deadline, *task_id));
-                }
-            })
-        }
-        for (deadline, task_id) in to_wake {
-            self.inner.wake_frozen(deadline, task_id);
-            self.expired.insert((deadline, task_id));
-        }
     }
 }

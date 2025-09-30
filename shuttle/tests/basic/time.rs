@@ -3,8 +3,7 @@ use shuttle::scheduler::{DfsScheduler, RandomScheduler};
 use shuttle::sync::time::constant_stepped::{ConstantSteppedTimeModel, ConstantTimeDistribution};
 use shuttle::sync::time::frozen::FrozenTimeModel;
 use shuttle::sync::time::{async_interval, async_sleep, async_timeout, trigger_timeouts, Duration, Instant};
-use shuttle::thread;
-use shuttle::{Config, Runner};
+use shuttle::{future, thread, Config, Runner};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tracing::trace;
@@ -82,7 +81,7 @@ fn test_stepped_async_sleep() {
     let scheduler = RandomScheduler::new(10);
     let runner = Runner::new_with_time_model(scheduler, time_model, Config::new());
     runner.run(|| {
-        shuttle::future::block_on(async {
+        future::block_on(async {
             let start = Instant::now();
             async_sleep(Duration::from_millis(50)).await;
             let elapsed = start.elapsed();
@@ -97,7 +96,7 @@ fn test_stepped_timeout_expired() {
     let scheduler = RandomScheduler::new(10);
     let runner = Runner::new_with_time_model(scheduler, time_model, Config::new());
     runner.run(|| {
-        shuttle::future::block_on(async {
+        future::block_on(async {
             let start = Instant::now();
             let result = async_timeout(Duration::from_millis(50), async {
                 async_sleep(Duration::from_millis(100)).await;
@@ -117,7 +116,7 @@ fn test_stepped_timeout_not_expired() {
     let scheduler = RandomScheduler::new(10);
     let runner = Runner::new_with_time_model(scheduler, time_model, Config::new());
     runner.run(|| {
-        shuttle::future::block_on(async {
+        future::block_on(async {
             let result = async_timeout(Duration::from_millis(50), async {
                 async_sleep(Duration::from_millis(20)).await;
                 42
@@ -134,7 +133,7 @@ fn test_async_interval() {
     let scheduler = RandomScheduler::new(10);
     let runner = Runner::new_with_time_model(scheduler, time_model, Config::new());
     runner.run(|| {
-        shuttle::future::block_on(async {
+        future::block_on(async {
             let mut interval = async_interval(Duration::from_millis(10));
             let start = Instant::now();
             interval.tick().await;
@@ -182,7 +181,7 @@ fn test_frozen_trigger_timeouts() {
         let handle = thread::spawn(move || {
             set_label_for_task(me(), TaskType("target".to_string()));
 
-            shuttle::future::block_on(async {
+            future::block_on(async {
                 async_sleep(Duration::from_millis(100)).await;
                 woken_clone.store(true, Ordering::SeqCst);
             });
@@ -215,7 +214,7 @@ fn test_frozen_trigger_timeouts_async_timeout() {
         let handle = thread::spawn(move || {
             set_label_for_task(me(), TaskType("target".to_string()));
 
-            shuttle::future::block_on(async {
+            future::block_on(async {
                 let result = async_timeout(Duration::from_millis(100), async {
                     async_sleep(Duration::from_millis(200)).await;
                     42
@@ -253,7 +252,7 @@ fn test_frozen_trigger_timeouts_selective() {
 
         let other_handle = thread::spawn(move || {
             set_label_for_task(me(), TaskType("other".to_string()));
-            shuttle::future::block_on(async {
+            future::block_on(async {
                 async_sleep(Duration::from_millis(100)).await;
                 other_woken_clone.store(true, Ordering::SeqCst);
             });

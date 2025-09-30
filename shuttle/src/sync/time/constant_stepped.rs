@@ -129,10 +129,6 @@ impl TimeModel for ConstantSteppedTimeModel {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
-
-    fn trigger_timeouts(&mut self, _trigger: Box<dyn Fn(&crate::current::Labels) -> bool>) {
-        warn!("trigger_timeouts is not supported by ConstantSteppedTimeModel");
-    }
 }
 
 /// A constant distrubution; each sample returns the same time
