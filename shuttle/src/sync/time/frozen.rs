@@ -34,15 +34,23 @@ impl FrozenTimeModel {
     where
         F: Fn(&Labels) -> bool + 'static,
     {
+        let num_tasks = ExecutionState::with(|s| s.num_tasks());
+        for i in 0..num_tasks {
+            let task_id = TaskId::from(i);
+            with_labels_for_task(task_id, |labels| {
+                if trigger(labels) {
+                    self.expired.insert(task_id);
+                }
+            });
+        }
+
         let mut to_wake = Vec::new();
         for Reverse((deadline, task_id)) in self.inner.get_waiters() {
-            with_labels_for_task(*task_id, |labels| {
-                if trigger(labels) {
-                    to_wake.push((*deadline, *task_id));
-                }
-                self.expired.insert(*task_id);
-            })
+            if self.expired.contains(task_id) {
+                to_wake.push((*deadline, *task_id));
+            }
         }
+
         for (deadline, task_id) in to_wake {
             self.inner.wake_frozen(deadline, task_id);
         }
