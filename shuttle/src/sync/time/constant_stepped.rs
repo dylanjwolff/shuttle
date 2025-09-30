@@ -18,8 +18,8 @@ pub struct ConstantSteppedTimeModel {
     distribution: ConstantTimeDistribution,
     current_step_size: std::time::Duration,
     current_time_elapsed: std::time::Duration,
-    waiters: BinaryHeap<Reverse<(std::time::Duration, TaskId)>>,
-    wakers: HashMap<(std::time::Duration, TaskId), Waker>,
+    waiters: BinaryHeap<Reverse<(std::time::Duration, TaskId, u64)>>,
+    wakers: HashMap<u64, Waker>,
 }
 
 unsafe impl Send for ConstantSteppedTimeModel {}
@@ -37,9 +37,9 @@ impl ConstantSteppedTimeModel {
     }
 
     fn unblock_expired(&mut self) {
-        while let Some(waker_key) = self.waiters.peek().and_then(|Reverse((t, task_id))| {
+        while let Some(waker_key) = self.waiters.peek().and_then(|Reverse((t, _, sleep_id))| {
             if *t <= self.current_time_elapsed {
-                Some((*t, *task_id))
+                Some(*sleep_id)
             } else {
                 None
             }
@@ -53,15 +53,14 @@ impl ConstantSteppedTimeModel {
     }
 
     /// Get the currently sleeping tasks and deadlines. May contain duplicates
-    pub fn get_waiters(&self) -> &[Reverse<(std::time::Duration, TaskId)>] {
+    pub fn get_waiters(&self) -> &[Reverse<(std::time::Duration, TaskId, u64)>] {
         self.waiters.as_slice()
     }
 
     /// Manually wake a task without affecting the global clock
-    pub fn wake_frozen(&mut self, deadline: std::time::Duration, task_id: TaskId) {
-        println!("try wake frozen {:?} {:?}", deadline, task_id);
-        if let Some(waker) = self.wakers.remove(&(deadline, task_id)) {
-            println!("wake frozen {:?} {:?}", deadline, task_id);
+    pub fn wake_frozen(&mut self, sleep_id: u64) {
+        println!("try wake frozen {:?}", sleep_id);
+        if let Some(waker) = self.wakers.remove(&sleep_id) {
             waker.wake();
         }
     }
@@ -99,7 +98,7 @@ impl TimeModel for ConstantSteppedTimeModel {
         if self.waiters.is_empty() {
             return false;
         }
-        if let Some(Reverse((time, _))) = self.waiters.peek() {
+        if let Some(Reverse((time, _, _))) = self.waiters.peek() {
             self.current_time_elapsed = max(self.current_time_elapsed, *time);
         }
         self.unblock_expired();
@@ -110,7 +109,7 @@ impl TimeModel for ConstantSteppedTimeModel {
         self.current_time_elapsed += dur.unwrap_std();
     }
 
-    fn register_sleep(&mut self, deadline: Instant, waker: Option<Waker>) -> bool {
+    fn register_sleep(&mut self, deadline: Instant, sleep_id: u64, waker: Option<Waker>) -> bool {
         let deadline = deadline.unwrap_simulated();
         if deadline <= self.current_time_elapsed {
             return true;
@@ -118,10 +117,10 @@ impl TimeModel for ConstantSteppedTimeModel {
 
         if let Some(waker) = waker {
             println!("register sleep {:?} {:?}", deadline, waker);
-            let id = ExecutionState::with(|s| s.current().id());
-            let item = (deadline, id);
+            let task_id = ExecutionState::with(|s| s.current().id());
+            let item = (deadline, task_id, sleep_id);
             self.waiters.push(Reverse(item));
-            self.wakers.insert(item, waker);
+            self.wakers.insert(sleep_id, waker);
         }
         false
     }

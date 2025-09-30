@@ -292,6 +292,7 @@ pub(crate) struct ExecutionState {
     runnable_tasks: Vec<*const Task>,
     #[allow(unused)]
     pub(crate) time_model: Rc<RefCell<dyn TimeModel>>,
+    pub(crate) timer_id_counter: u64,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -339,6 +340,7 @@ impl ExecutionState {
             top_level_span: tracing::Span::current(),
             runnable_tasks: Vec::with_capacity(DEFAULT_INLINE_TASKS),
             time_model,
+            timer_id_counter: 0,
         }
     }
 
@@ -568,6 +570,8 @@ impl ExecutionState {
 
         TASK_ID_TO_TAGS.with(|cell| cell.borrow_mut().clear());
         LABELS.with(|cell| cell.borrow_mut().clear());
+
+        Self::with(|s| s.timer_id_counter = 0);
 
         #[cfg(debug_assertions)]
         Self::with(|state| state.has_cleaned_up = true);

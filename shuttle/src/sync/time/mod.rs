@@ -5,6 +5,7 @@
 use std::cmp::Ordering;
 use std::future::Future;
 use std::ops::{Add, AddAssign, Mul, Sub, SubAssign};
+
 use std::{cell::RefCell, rc::Rc};
 
 use std::pin::Pin;
@@ -21,6 +22,18 @@ use crate::sync::time::frozen::FrozenTimeModel;
 
 pub mod constant_stepped;
 pub mod frozen;
+
+/// Returns the current count of created timeout/sleep futures
+pub fn timer_count() -> u64 {
+    ExecutionState::with(|state| state.timer_id_counter)
+}
+
+fn increment_timer_counter() -> u64 {
+    ExecutionState::with(|state| {
+        state.timer_id_counter += 1;
+        state.timer_id_counter
+    })
+}
 
 /// A distribution of times which can be sampled
 pub trait TimeDistribution<D> {
@@ -45,7 +58,7 @@ pub trait TimeModel: std::fmt::Debug {
     /// advance
     fn advance(&mut self, duration: Duration);
     /// register a sleep/timeout on the current task
-    fn register_sleep(&mut self, deadline: Instant, waker: Option<Waker>) -> bool;
+    fn register_sleep(&mut self, deadline: Instant, id: u64, waker: Option<Waker>) -> bool;
     /// downcast to Any for type checking
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
@@ -335,14 +348,17 @@ pub fn advance(dur: Duration) {
 
 /// Returns a future which sleeps until the duration has elapsed
 pub fn async_sleep(dur: Duration) -> Sleep {
+    let id = increment_timer_counter();
     Sleep {
+        id,
         deadline: Instant::now().checked_add(dur).unwrap(),
     }
 }
 
 /// Returns a future which sleeps until the deadline is reached
 pub fn async_sleep_until(deadline: Instant) -> Sleep {
-    Sleep { deadline }
+    let id = increment_timer_counter();
+    Sleep { id, deadline }
 }
 
 /// Async interval
@@ -369,6 +385,7 @@ pub fn async_interval_at(start: Instant, period: Duration) -> Interval {
 #[pin_project]
 #[derive(Debug)]
 pub struct Sleep {
+    id: u64,
     deadline: Instant,
 }
 
@@ -376,14 +393,16 @@ impl Future for Sleep {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let is_expired = get_time_model().borrow_mut().register_sleep(self.deadline, None);
+        let is_expired = get_time_model()
+            .borrow_mut()
+            .register_sleep(self.deadline, self.id, None);
         println!("sleep poll (is expired {})", is_expired);
         if is_expired {
             Poll::Ready(())
         } else {
             let _ = get_time_model()
                 .borrow_mut()
-                .register_sleep(self.deadline, Some(cx.waker().clone()));
+                .register_sleep(self.deadline, self.id, Some(cx.waker().clone()));
             Poll::Pending
         }
     }
@@ -473,7 +492,9 @@ pub fn async_timeout<F>(d: Duration, f: F) -> Timeout<F>
 where
     F: Future,
 {
+    let id = increment_timer_counter();
     Timeout {
+        id,
         deadline: Instant::now() + d,
         future: f,
     }
@@ -486,6 +507,7 @@ pub struct Timeout<F>
 where
     F: Future,
 {
+    id: u64,
     deadline: Instant,
     #[pin]
     future: F,
@@ -506,7 +528,7 @@ where
         println!("timeout poll {:?}", this.deadline);
 
         let tm = get_time_model();
-        let expired = tm.borrow_mut().register_sleep(*this.deadline, None);
+        let expired = tm.borrow_mut().register_sleep(*this.deadline, *this.id, None);
         if expired {
             return Poll::Ready(Err(Elapsed));
         }
@@ -514,7 +536,9 @@ where
         match this.future.poll(cx) {
             Poll::Pending => {
                 println!("2nd timeout poll");
-                let expired = tm.borrow_mut().register_sleep(*this.deadline, Some(cx.waker().clone()));
+                let expired = tm
+                    .borrow_mut()
+                    .register_sleep(*this.deadline, *this.id, Some(cx.waker().clone()));
                 if expired {
                     return Poll::Ready(Err(Elapsed));
                 }

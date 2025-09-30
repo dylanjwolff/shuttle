@@ -15,13 +15,22 @@ use super::{
 };
 
 /// A time model where time does not advance unless forced
-#[derive(Clone, Debug)]
 pub struct FrozenTimeModel {
     inner: ConstantSteppedTimeModel,
     expired: HashSet<TaskId>,
+    #[allow(clippy::type_complexity)]
+    triggers: Vec<Box<dyn Fn(&Labels) -> bool>>,
 }
 
-unsafe impl Send for FrozenTimeModel {}
+impl std::fmt::Debug for FrozenTimeModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrozenTimeModel")
+            .field("inner", &self.inner)
+            .field("expired", &self.expired)
+            .field("triggers", &format!("[{} triggers]", self.triggers.len()))
+            .finish()
+    }
+}
 
 impl FrozenTimeModel {
     /// Create a new Frozen time model
@@ -45,20 +54,23 @@ impl FrozenTimeModel {
         }
 
         let mut to_wake = Vec::new();
-        for Reverse((deadline, task_id)) in self.inner.get_waiters() {
+        for Reverse((_, task_id, sleep_id)) in self.inner.get_waiters() {
             if self.expired.contains(task_id) {
-                to_wake.push((*deadline, *task_id));
+                to_wake.push(*sleep_id);
             }
         }
 
-        for (deadline, task_id) in to_wake {
-            self.inner.wake_frozen(deadline, task_id);
+        for sleep_id in to_wake {
+            self.inner.wake_frozen(sleep_id);
         }
+
+        self.triggers.push(Box::new(trigger));
     }
 
     /// Clear all triggers that expire timeouts
     pub fn clear_triggers(&mut self) {
         self.expired.clear();
+        self.triggers.clear();
     }
 }
 
@@ -67,6 +79,17 @@ impl Default for FrozenTimeModel {
         Self {
             inner: ConstantSteppedTimeModel::new(ConstantTimeDistribution::new(std::time::Duration::ZERO)),
             expired: HashSet::new(),
+            triggers: Vec::new(),
+        }
+    }
+}
+
+impl Clone for FrozenTimeModel {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            expired: self.expired.clone(),
+            triggers: Vec::new(), // Don't clone triggers
         }
     }
 }
@@ -85,6 +108,7 @@ impl TimeModel for FrozenTimeModel {
     fn reset(&mut self) {
         self.inner.reset();
         self.expired.clear();
+        self.triggers.clear();
     }
 
     fn instant(&self) -> Instant {
@@ -99,10 +123,18 @@ impl TimeModel for FrozenTimeModel {
         self.inner.advance(dur);
     }
 
-    fn register_sleep(&mut self, deadline: Instant, waker: Option<Waker>) -> bool {
+    fn register_sleep(&mut self, deadline: Instant, sleep_id: u64, waker: Option<Waker>) -> bool {
         let task_id = ExecutionState::me();
+        for trigger in &self.triggers {
+            with_labels_for_task(task_id, |labels| {
+                if trigger(labels) {
+                    self.expired.insert(task_id);
+                }
+            });
+        }
+
         if !self.expired.contains(&task_id) {
-            self.inner.register_sleep(deadline, waker)
+            self.inner.register_sleep(deadline, sleep_id, waker)
         } else {
             true
         }
