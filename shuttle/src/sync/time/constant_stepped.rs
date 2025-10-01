@@ -1,5 +1,3 @@
-//! Constant stepped time model
-
 use std::{
     cmp::{max, Reverse},
     collections::{BinaryHeap, HashMap},
@@ -12,7 +10,7 @@ use crate::{current::TaskId, runtime::execution::ExecutionState};
 
 use super::{Duration, Instant, TimeDistribution, TimeModel};
 
-/// A time model where time advances by a constant amount for each step
+/// A time model where time advances by a constant amount for each scheduling step
 #[derive(Clone, Debug)]
 pub struct ConstantSteppedTimeModel {
     distribution: ConstantTimeDistribution,
@@ -26,7 +24,8 @@ unsafe impl Send for ConstantSteppedTimeModel {}
 
 impl ConstantSteppedTimeModel {
     /// Create a ConstantSteppedTimeModel
-    pub fn new(distribution: ConstantTimeDistribution) -> Self {
+    pub fn new(step_size: std::time::Duration) -> Self {
+        let distribution = ConstantTimeDistribution::new(step_size);
         Self {
             distribution,
             current_step_size: distribution.sample(),
@@ -45,7 +44,6 @@ impl ConstantSteppedTimeModel {
             }
         }) {
             _ = self.waiters.pop();
-            println!("remove {:?} from {:?}", waker_key, self.wakers);
             if let Some(waker) = self.wakers.remove(&waker_key) {
                 waker.wake();
             }
@@ -59,7 +57,6 @@ impl ConstantSteppedTimeModel {
 
     /// Manually wake a task without affecting the global clock
     pub fn wake_frozen(&mut self, sleep_id: u64) {
-        println!("try wake frozen {:?}", sleep_id);
         if let Some(waker) = self.wakers.remove(&sleep_id) {
             waker.wake();
         }
@@ -93,8 +90,6 @@ impl TimeModel for ConstantSteppedTimeModel {
     }
 
     fn wake_next(&mut self) -> bool {
-        println!("wake next {:?}", self.waiters.peek());
-        println!("wake next {:?}", self.waiters);
         if self.waiters.is_empty() {
             return false;
         }
@@ -116,7 +111,6 @@ impl TimeModel for ConstantSteppedTimeModel {
         }
 
         if let Some(waker) = waker {
-            println!("register sleep {:?} {:?}", deadline, waker);
             let task_id = ExecutionState::with(|s| s.current().id());
             let item = (deadline, task_id, sleep_id);
             self.waiters.push(Reverse(item));
@@ -130,7 +124,7 @@ impl TimeModel for ConstantSteppedTimeModel {
     }
 }
 
-/// A constant distrubution; each sample returns the same time
+/// A constant distribution; each sample returns the same time
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct ConstantTimeDistribution {
     /// The time that will be returned on sampling

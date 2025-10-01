@@ -149,9 +149,7 @@ impl PortfolioRunner {
             config,
         }
     }
-}
 
-impl PortfolioRunner {
     /// Add the given scheduler to the portfolio of schedulers to run the test with.
     pub fn add(&mut self, scheduler: impl Scheduler + Send + 'static) {
         self.schedulers.push(Box::new(scheduler));
@@ -226,6 +224,7 @@ impl PortfolioRunner {
         }
     }
 }
+
 impl fmt::Debug for PortfolioRunner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("PortfolioRunner")

@@ -1,5 +1,3 @@
-//! Frozen time with triggers
-
 use std::{cmp::Reverse, collections::HashSet, task::Waker};
 
 use tracing::warn;
@@ -9,10 +7,7 @@ use crate::{
     runtime::execution::ExecutionState,
 };
 
-use super::{
-    constant_stepped::ConstantSteppedTimeModel, constant_stepped::ConstantTimeDistribution, Duration, Instant,
-    TimeModel,
-};
+use super::{constant_stepped::ConstantSteppedTimeModel, Duration, Instant, TimeModel};
 
 /// A time model where time does not advance unless forced
 pub struct FrozenTimeModel {
@@ -77,7 +72,7 @@ impl FrozenTimeModel {
 impl Default for FrozenTimeModel {
     fn default() -> Self {
         Self {
-            inner: ConstantSteppedTimeModel::new(ConstantTimeDistribution::new(std::time::Duration::ZERO)),
+            inner: ConstantSteppedTimeModel::new(std::time::Duration::ZERO),
             expired: HashSet::new(),
             triggers: Vec::new(),
         }

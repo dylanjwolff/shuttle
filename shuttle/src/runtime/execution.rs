@@ -290,9 +290,10 @@ pub(crate) struct ExecutionState {
     // Persistent Vec used as a bump allocator for references to runnable tasks to avoid slow allocation
     // on each scheduling decision. Should not be used outside of the `schedule` function
     runnable_tasks: Vec<*const Task>,
-    #[allow(unused)]
-    pub(crate) time_model: Rc<RefCell<dyn TimeModel>>,
+
+    // Counter for unique timing resource ids (Sleeps, Timeouts and Intervals)
     pub(crate) timer_id_counter: u64,
+    pub(crate) time_model: Rc<RefCell<dyn TimeModel>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

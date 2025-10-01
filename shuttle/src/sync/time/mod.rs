@@ -1,6 +1,6 @@
 //! Time
 //!
-//! Timing primitives allow Shuttle tests to interact with wall-clock time in a deterministic manner
+//! Timing primitives allow Shuttle tests to interact with wall-clock time (Instant, Duration, Timeout, etc.) in a deterministic manner
 
 use std::cmp::Ordering;
 use std::future::Future;
@@ -20,7 +20,9 @@ use crate::runtime::execution::ExecutionState;
 use crate::runtime::thread;
 use crate::sync::time::frozen::FrozenTimeModel;
 
+/// Constant stepped time model implementation
 pub mod constant_stepped;
+/// Frozen time model implementation
 pub mod frozen;
 
 /// Returns the current count of created timeout/sleep futures
@@ -43,27 +45,32 @@ pub trait TimeDistribution<D> {
 
 /// The trait implemented by each TimeModel
 pub trait TimeModel: std::fmt::Debug {
-    /// wake the next sleeping task if all tasks are blocked; returns true if exists task was able to be woken
+    /// Wake the next sleeping task; returns true if there exists a task that was able to be woken.
+    /// Called when all tasks are blocked to resolve timing based deadlocks (all unblocked tasks are sleeping).
     fn wake_next(&mut self) -> bool;
-    /// reset
+    /// Reset the TimeModel state for the next Shuttle iteration
     fn reset(&mut self);
-    /// step
+    /// Callback after each scheduling step to allow the TimeModel to update itself
     fn step(&mut self);
-    /// instant
+    /// Used to create the TimeModel's Instant struct in functions like Instant::now()
     fn instant(&self) -> Instant;
-    /// pause
+    /// Pauses the TimeModel
     fn pause(&mut self);
-    /// resume
+    /// Resumes the TimeModel
     fn resume(&mut self);
-    /// advance
+    /// Manually advances the TimeModel's clock by a fixed amount
     fn advance(&mut self, duration: Duration);
-    /// register a sleep/timeout on the current task
+    /// Callback for registering a sleep/timeout on the current task. It is up to the TimeModel
+    /// implementation to determine when to wake the sleeping task. If no waker is provided, then
+    /// the caller is polling whether it is currently expired but is not yet performing a blocking
+    /// sleep.
     fn register_sleep(&mut self, deadline: Instant, id: u64, waker: Option<Waker>) -> bool;
-    /// downcast to Any for type checking
+    /// Downcast to Any for type casting / checking
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
-fn get_time_model() -> Rc<RefCell<dyn TimeModel>> {
+/// Provides a reference to the current TimeModel for this execution
+pub fn get_time_model() -> Rc<RefCell<dyn TimeModel>> {
     ExecutionState::with(|s| Rc::clone(&s.time_model))
 }
 
@@ -340,13 +347,12 @@ pub fn sleep(dur: Duration) {
 /// Advances the current global time without putting the current thread to sleep
 /// Behavior of this function depends on the TimeModel provided to Shuttle
 pub fn advance(dur: Duration) {
-    ExecutionState::with(|s| Rc::clone(&s.time_model))
-        .borrow_mut()
-        .advance(dur);
+    get_time_model().borrow_mut().advance(dur);
     thread::switch();
 }
 
 /// Returns a future which sleeps until the duration has elapsed
+/// Behavior of this function depends on the TimeModel provided to Shuttle
 pub fn async_sleep(dur: Duration) -> Sleep {
     let id = increment_timer_counter();
     Sleep {
@@ -356,12 +362,14 @@ pub fn async_sleep(dur: Duration) -> Sleep {
 }
 
 /// Returns a future which sleeps until the deadline is reached
+/// Behavior of this function depends on the TimeModel provided to Shuttle
 pub fn async_sleep_until(deadline: Instant) -> Sleep {
     let id = increment_timer_counter();
     Sleep { id, deadline }
 }
 
-/// Async interval
+/// Returns a struct which sleeps repeatedly at a fixed time intervals (a tokio::time::Interval)
+/// Behavior of this function depends on the TimeModel provided to Shuttle
 pub fn async_interval(dur: Duration) -> Interval {
     Interval {
         start: None,
@@ -371,7 +379,9 @@ pub fn async_interval(dur: Duration) -> Interval {
     }
 }
 
-/// Async interval
+/// Returns a struct which sleeps repeatedly at a fixed time intervals (a tokio::time::Interval)
+/// This Interval starts at a fixed start time.
+/// Behavior of this function depends on the TimeModel provided to Shuttle
 pub fn async_interval_at(start: Instant, period: Duration) -> Interval {
     Interval {
         start: Some(start),
@@ -381,7 +391,7 @@ pub fn async_interval_at(start: Instant, period: Duration) -> Interval {
     }
 }
 
-/// sleep
+/// A future which returns Poll::Pending until its deadline
 #[pin_project]
 #[derive(Debug)]
 pub struct Sleep {
@@ -396,7 +406,6 @@ impl Future for Sleep {
         let is_expired = get_time_model()
             .borrow_mut()
             .register_sleep(self.deadline, self.id, None);
-        println!("sleep poll (is expired {})", is_expired);
         if is_expired {
             Poll::Ready(())
         } else {
@@ -442,9 +451,7 @@ impl Interval {
     /// tick
     pub async fn tick(&mut self) -> Instant {
         let deadline = self.next_deadline();
-        println!("tick sleep until {:?}", deadline);
         async_sleep_until(deadline).await;
-        println!("tick sleep done");
         self.ticks += 1;
         deadline
     }
@@ -525,7 +532,6 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        println!("timeout poll {:?}", this.deadline);
 
         let tm = get_time_model();
         let expired = tm.borrow_mut().register_sleep(*this.deadline, *this.id, None);
@@ -535,7 +541,6 @@ where
 
         match this.future.poll(cx) {
             Poll::Pending => {
-                println!("2nd timeout poll");
                 let expired = tm
                     .borrow_mut()
                     .register_sleep(*this.deadline, *this.id, Some(cx.waker().clone()));
