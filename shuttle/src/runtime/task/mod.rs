@@ -279,6 +279,10 @@ pub struct Task {
     /// stable across iterations in a single Shuttle test. Tasks with the same signature are very likely to exhibit
     /// similar behavior
     pub(crate) signature: TaskSignature,
+
+    /// Position of this task in the schedulable_tasks array, updated on insertion and removal
+    /// None means the task is not currently in the schedulable_tasks array
+    pub(crate) schedulable_position: Option<usize>,
 }
 
 #[allow(deprecated)]
@@ -328,6 +332,7 @@ impl Task {
             tag: None,
             backtrace: Backtrace::disabled(),
             signature,
+            schedulable_position: None,
         };
 
         if let Some(tag) = tag {
@@ -480,11 +485,14 @@ impl Task {
         };
         self.state = TaskState::Blocked { allow_spurious_wakeups };
         if was_runnable && !allow_spurious_wakeups {
-            let pos = runnable_tasks
-                .iter()
-                .position(|&t| unsafe { (*t).id() == self.id })
-                .expect("ID not found");
-            runnable_tasks.swap_remove(pos);
+            if let Some(pos) = self.schedulable_position.take() {
+                let _removed_task = runnable_tasks.swap_remove(pos);
+                // If we swapped with the last element, update the position of the swapped task
+                if pos < runnable_tasks.len() {
+                    // SAFETY: The task pointer is valid because it was just moved from the end
+                    unsafe { (*(runnable_tasks[pos] as *mut Task)).schedulable_position = Some(pos) };
+                }
+            }
         }
     }
 
@@ -500,11 +508,14 @@ impl Task {
         };
         self.state = TaskState::Sleeping;
         if was_runnable {
-            let pos = runnable_tasks
-                .iter()
-                .position(|&t| unsafe { (*t).id() == self.id })
-                .expect("ID not found");
-            runnable_tasks.swap_remove(pos);
+            if let Some(pos) = self.schedulable_position.take() {
+                let _removed_task = runnable_tasks.swap_remove(pos);
+                // If we swapped with the last element, update the position of the swapped task
+                if pos < runnable_tasks.len() {
+                    // SAFETY: The task pointer is valid because it was just moved from the end
+                    unsafe { (*(runnable_tasks[pos] as *mut Task)).schedulable_position = Some(pos) };
+                }
+            }
         }
     }
 
@@ -518,7 +529,9 @@ impl Task {
         };
         self.state = TaskState::Runnable;
         if !was_runnable {
+            let task_position = runnable_tasks.len();
             runnable_tasks.push(self as *const Task);
+            self.schedulable_position = Some(task_position);
         }
 
         // When a task gets unblocked, it's definitely no longer blocked in a call to `park`. This
@@ -545,11 +558,14 @@ impl Task {
         }
         self.state = TaskState::Finished;
         if was_runnable {
-            let pos = runnable_tasks
-                .iter()
-                .position(|&t| unsafe { (*t).id() == self.id })
-                .expect("ID not found");
-            runnable_tasks.swap_remove(pos);
+            if let Some(pos) = self.schedulable_position.take() {
+                let _removed_task = runnable_tasks.swap_remove(pos);
+                // If we swapped with the last element, update the position of the swapped task
+                if pos < runnable_tasks.len() {
+                    // SAFETY: The task pointer is valid because it was just moved from the end
+                    unsafe { (*(runnable_tasks[pos] as *mut Task)).schedulable_position = Some(pos) };
+                }
+            }
         }
     }
 

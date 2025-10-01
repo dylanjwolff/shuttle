@@ -428,9 +428,11 @@ impl ExecutionState {
                 TaskSignature::new_parentless(caller),
             );
             state.tasks.push(Box::pin(task));
+            let task_position = state.schedulable_tasks.len();
             state
                 .schedulable_tasks
                 .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.tasks[task_id.0].as_mut().get_mut().schedulable_position = Some(task_position);
             state.num_unfinished_attached += 1;
             state.num_runnable += 1;
 
@@ -479,9 +481,11 @@ impl ExecutionState {
             );
 
             state.tasks.push(Box::pin(task));
+            let task_position = state.schedulable_tasks.len();
             state
                 .schedulable_tasks
                 .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.tasks[task_id.0].as_mut().get_mut().schedulable_position = Some(task_position);
             state.num_unfinished_attached += 1;
             state.num_runnable += 1;
 
@@ -531,9 +535,11 @@ impl ExecutionState {
                 state.current_mut().signature.new_child(caller),
             );
             state.tasks.push(Box::pin(task));
+            let task_position = state.schedulable_tasks.len();
             state
                 .schedulable_tasks
                 .push(state.tasks[task_id.0].as_ref().get_ref() as *const Task);
+            state.tasks[task_id.0].as_mut().get_mut().schedulable_position = Some(task_position);
             state.num_unfinished_attached += 1;
             state.num_runnable += 1;
 
@@ -850,8 +856,6 @@ impl ExecutionState {
         trace!("any_runnable: {} {}", any_runnable, self.num_runnable);
         assert!(any_runnable || self.num_runnable == 0);
         assert!(!any_runnable || self.num_runnable != 0);
-
-
 
         // Retains the capacity of `runnable_tasks_correct` for future calls of `schedule`
         self.runnable_tasks_correct.clear();
