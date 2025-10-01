@@ -1,6 +1,7 @@
 use crate::sync::atomic::Atomic;
 #[cfg(test)]
 use crate::sync::ResourceSignature;
+use shuttle_macros::shuttle_entry;
 use std::sync::atomic::Ordering;
 
 /// A boolean type which can be safely shared between threads.
@@ -34,26 +35,31 @@ impl AtomicBool {
     }
 
     /// Returns a mutable reference to the underlying boolean.
+    #[shuttle_entry]
     pub fn get_mut(&mut self) -> &mut bool {
         self.inner.get_mut()
     }
 
     /// Consumes the atomic and returns the contained value.
+    #[shuttle_entry]
     pub fn into_inner(self) -> bool {
         self.inner.into_inner()
     }
 
     /// Loads a value from the atomic boolean.
+    #[shuttle_entry]
     pub fn load(&self, order: Ordering) -> bool {
         self.inner.load(order)
     }
 
     /// Stores a value into the atomic boolean.
+    #[shuttle_entry]
     pub fn store(&self, val: bool, order: Ordering) {
         self.inner.store(val, order)
     }
 
     /// Stores a value into the atomic boolean, returning the previous value.
+    #[shuttle_entry]
     pub fn swap(&self, val: bool, order: Ordering) -> bool {
         self.inner.swap(val, order)
     }
@@ -61,6 +67,7 @@ impl AtomicBool {
     /// Fetches the value, and applies a function to it that returns an optional new value.
     /// Returns a `Result` of `Ok(previous_value)` if the function returned `Some(_)`, else
     /// `Err(previous_value)`.
+    #[shuttle_entry]
     pub fn fetch_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> Result<bool, bool>
     where
         F: FnMut(bool) -> Option<bool>,
@@ -71,6 +78,7 @@ impl AtomicBool {
     /// Stores a value into the atomic boolean if the current value is the same as the
     /// `current` value.
     #[deprecated(since = "0.0.6", note = "Use `compare_exchange` or `compare_exchange_weak` instead")]
+    #[shuttle_entry]
     pub fn compare_and_swap(&self, current: bool, new: bool, order: Ordering) -> bool {
         match self.compare_exchange(current, new, order, order) {
             Ok(v) => v,
@@ -84,6 +92,7 @@ impl AtomicBool {
     /// The return value is a result indicating whether the new value was written and
     /// containing the previous value. On success this value is guaranteed to be equal to
     /// `current`.
+    #[shuttle_entry]
     pub fn compare_exchange(
         &self,
         current: bool,
@@ -102,6 +111,7 @@ impl AtomicBool {
     /// platforms. The return value is a result indicating whether the new value was written
     /// and containing the previous value.
     // TODO actually produce spurious failures
+    #[shuttle_entry]
     pub fn compare_exchange_weak(
         &self,
         current: bool,
@@ -113,21 +123,25 @@ impl AtomicBool {
     }
 
     /// Logical "and" with the current value. Returns the previous value.
+    #[shuttle_entry]
     pub fn fetch_and(&self, val: bool, order: Ordering) -> bool {
         self.fetch_update(order, order, |old| Some(old & val)).unwrap()
     }
 
     /// Logical "nand" with the current value. Returns the previous value.
+    #[shuttle_entry]
     pub fn fetch_nand(&self, val: bool, order: Ordering) -> bool {
         self.fetch_update(order, order, |old| Some(!(old & val))).unwrap()
     }
 
     /// Logical "or" with the current value. Returns the previous value.
+    #[shuttle_entry]
     pub fn fetch_or(&self, val: bool, order: Ordering) -> bool {
         self.fetch_update(order, order, |old| Some(old | val)).unwrap()
     }
 
     /// Logical "xor" with the current value. Returns the previous value.
+    #[shuttle_entry]
     pub fn fetch_xor(&self, val: bool, order: Ordering) -> bool {
         self.fetch_update(order, order, |old| Some(old ^ val)).unwrap()
     }

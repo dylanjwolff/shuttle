@@ -5,6 +5,7 @@ use crate::runtime::task::TaskId;
 use crate::runtime::thread;
 use crate::sync::{MutexGuard, ResourceSignature, ResourceType};
 use assoc::AssocExt;
+use shuttle_macros::shuttle_entry;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{LockResult, PoisonError};
@@ -131,6 +132,7 @@ impl Condvar {
     }
 
     /// Blocks the current thread until this condition variable receives a notification.
+    #[shuttle_entry]
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> LockResult<MutexGuard<'a, T>> {
         let me = ExecutionState::me();
 
@@ -188,6 +190,7 @@ impl Condvar {
 
     /// Blocks the current thread until this condition variable receives a notification and the
     /// provided condition is false.
+    #[shuttle_entry]
     pub fn wait_while<'a, T, F>(&self, mut guard: MutexGuard<'a, T>, mut condition: F) -> LockResult<MutexGuard<'a, T>>
     where
         F: FnMut(&mut T) -> bool,
@@ -199,6 +202,7 @@ impl Condvar {
     }
 
     /// Waits on this condition variable for a notification, timing out after a specified duration.
+    #[shuttle_entry]
     pub fn wait_timeout<'a, T>(
         &self,
         guard: MutexGuard<'a, T>,
@@ -214,6 +218,7 @@ impl Condvar {
     ///
     /// The semantics of this function are equivalent to [`wait_while`](Self::wait_while) except
     /// that the thread will be blocked for roughly no longer than `dur`.
+    #[shuttle_entry]
     pub fn wait_timeout_while<'a, T, F>(
         &self,
         guard: MutexGuard<'a, T>,
@@ -233,6 +238,7 @@ impl Condvar {
     ///
     /// If there is a blocked thread on this condition variable, then it will be woken up from its
     /// call to wait or wait_timeout. Calls to notify_one are not buffered in any way.
+    #[shuttle_entry]
     pub fn notify_one(&self) {
         let me = ExecutionState::me();
 
@@ -270,6 +276,7 @@ impl Condvar {
     }
 
     /// Wakes up all blocked threads on this condvar.
+    #[shuttle_entry]
     pub fn notify_all(&self) {
         let me = ExecutionState::me();
 

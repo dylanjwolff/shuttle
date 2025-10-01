@@ -21,6 +21,7 @@ rand_pcg = "0.3.1"
 scoped-tls = "1.0.0"
 smallvec = { version = "1.11.2", features = ["const_new"] }
 tracing = { version = "0.1.36", default-features = false, features = ["std"] }
+shuttle-macros = { path = "../shuttle-macros" }
 
 # for annotation only
 regex = { version = "1.10.6", optional = true }

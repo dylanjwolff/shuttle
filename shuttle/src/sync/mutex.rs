@@ -3,6 +3,7 @@ use crate::future::batch_semaphore::{BatchSemaphore, Fairness};
 use crate::runtime::task::TaskId;
 use crate::sync::{LockResult, PoisonError, TryLockError, TryLockResult};
 use crate::sync::{ResourceSignature, ResourceType};
+use shuttle_macros::shuttle_entry;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display};
 use std::ops::{Deref, DerefMut};
@@ -46,6 +47,7 @@ impl<T> Mutex<T> {
 
 impl<T: ?Sized> Mutex<T> {
     /// Acquires a mutex, blocking the current thread until it is able to do so.
+    #[shuttle_entry]
     pub fn lock(&self) -> LockResult<MutexGuard<'_, T>> {
         let me = current::me();
 
@@ -95,6 +97,7 @@ impl<T: ?Sized> Mutex<T> {
     ///
     /// If the lock could not be acquired at this time, then Err is returned. This function does not
     /// block.
+    #[shuttle_entry]
     pub fn try_lock(&self) -> TryLockResult<MutexGuard<'_, T>> {
         let me = current::me();
 
@@ -134,11 +137,13 @@ impl<T: ?Sized> Mutex<T> {
     /// Since this call borrows the `Mutex` mutably, no actual locking needs to
     /// take place---the mutable borrow statically guarantees no locks exist.
     #[inline]
+    #[shuttle_entry]
     pub fn get_mut(&mut self) -> LockResult<&mut T> {
         self.inner.get_mut()
     }
 
     /// Consumes this mutex, returning the underlying data.
+    #[shuttle_entry]
     pub fn into_inner(self) -> LockResult<T>
     where
         T: Sized,

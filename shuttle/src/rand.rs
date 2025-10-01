@@ -5,6 +5,8 @@
 //!
 //! [`rand`]: https://docs.rs/rand/0.8.5/rand/index.html
 
+use shuttle_macros::shuttle_entry;
+
 /// Random number generators and adapters
 pub mod rngs {
     use crate::runtime::execution::ExecutionState;
@@ -51,6 +53,7 @@ pub mod rngs {
 /// Retrieve the thread-local random number generator, seeded by the system. Intended to be used in
 /// method chaining style, e.g. `thread_rng().gen::<i32>()`, or cached locally, e.g.
 /// `let mut rng = thread_rng();`.
+#[shuttle_entry]
 pub fn thread_rng() -> rngs::ThreadRng {
     rngs::ThreadRng { _field: () }
 }

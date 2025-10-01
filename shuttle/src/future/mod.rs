@@ -5,6 +5,8 @@
 //!
 //! [`futures::executor`]: https://docs.rs/futures/0.3.13/futures/executor/index.html
 
+use shuttle_macros::shuttle_entry;
+
 use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::TaskId;
 use crate::runtime::thread;
@@ -35,6 +37,7 @@ where
 
 /// Spawn a new async task that the executor will run to completion.
 #[track_caller]
+#[shuttle_entry]
 pub fn spawn<F>(fut: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
@@ -46,6 +49,7 @@ where
 /// Spawn a new async task that the executor will run to completion.
 /// This is just `spawn` without the `Send` bound, and it mirrors `spawn_local` from Tokio.
 #[track_caller]
+#[shuttle_entry]
 pub fn spawn_local<F>(fut: F) -> JoinHandle<F::Output>
 where
     F: Future + 'static,
@@ -237,6 +241,7 @@ where
 }
 
 /// Run a future to completion on the current thread.
+#[shuttle_entry]
 pub fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);
     let waker = ExecutionState::with(|state| state.current_mut().waker());

@@ -1,6 +1,7 @@
 use crate::sync::atomic::Atomic;
 #[cfg(test)]
 use crate::sync::ResourceSignature;
+use shuttle_macros::shuttle_entry;
 use std::sync::atomic::Ordering;
 
 /// A raw pointer type which can be safely shared between threads.
@@ -39,26 +40,31 @@ impl<T> AtomicPtr<T> {
     }
 
     /// Returns a mutable reference to the underlying pointer.
+    #[shuttle_entry]
     pub fn get_mut(&mut self) -> &mut *mut T {
         self.inner.get_mut()
     }
 
     /// Consumes the atomic and returns the contained value.
+    #[shuttle_entry]
     pub fn into_inner(self) -> *mut T {
         self.inner.into_inner()
     }
 
     /// Loads a value from the pointer.
+    #[shuttle_entry]
     pub fn load(&self, order: Ordering) -> *mut T {
         self.inner.load(order)
     }
 
     /// Stores a value into the pointer.
+    #[shuttle_entry]
     pub fn store(&self, val: *mut T, order: Ordering) {
         self.inner.store(val, order)
     }
 
     /// Stores a value into the atomic pointer, returning the previous value.
+    #[shuttle_entry]
     pub fn swap(&self, val: *mut T, order: Ordering) -> *mut T {
         self.inner.swap(val, order)
     }
@@ -66,6 +72,7 @@ impl<T> AtomicPtr<T> {
     /// Fetches the value, and applies a function to it that returns an optional new value.
     /// Returns a `Result` of `Ok(previous_value)` if the function returned `Some(_)`, else
     /// `Err(previous_value)`.
+    #[shuttle_entry]
     pub fn fetch_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> Result<*mut T, *mut T>
     where
         F: FnMut(*mut T) -> Option<*mut T>,
@@ -76,6 +83,7 @@ impl<T> AtomicPtr<T> {
     /// Stores a value into the atomic pointer if the current value is the same as the
     /// `current` value.
     #[deprecated(since = "0.0.6", note = "Use `compare_exchange` or `compare_exchange_weak` instead")]
+    #[shuttle_entry]
     pub fn compare_and_swap(&self, current: *mut T, new: *mut T, order: Ordering) -> *mut T {
         match self.compare_exchange(current, new, order, order) {
             Ok(v) => v,
@@ -89,6 +97,7 @@ impl<T> AtomicPtr<T> {
     /// The return value is a result indicating whether the new value was written and
     /// containing the previous value. On success this value is guaranteed to be equal to
     /// `current`.
+    #[shuttle_entry]
     pub fn compare_exchange(
         &self,
         current: *mut T,
@@ -107,6 +116,7 @@ impl<T> AtomicPtr<T> {
     /// platforms. The return value is a result indicating whether the new value was written
     /// and containing the previous value.
     // TODO actually produce spurious failures
+    #[shuttle_entry]
     pub fn compare_exchange_weak(
         &self,
         current: *mut T,

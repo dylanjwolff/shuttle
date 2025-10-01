@@ -5,6 +5,7 @@ use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::{TaskId, DEFAULT_INLINE_TASKS};
 use crate::runtime::thread;
 use crate::sync::{ResourceSignature, ResourceType};
+use shuttle_macros::shuttle_entry;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -400,18 +401,21 @@ pub struct Receiver<T> {
 impl<T> Receiver<T> {
     /// Attempts to wait for a value on this receiver, returning an error if the
     /// corresponding channel has hung up.
+    #[shuttle_entry]
     pub fn recv(&self) -> Result<T, RecvError> {
         self.inner.recv()
     }
 
     /// Attempts to wait for a value on this receiver, returning an error if the
     /// corresponding channel has hung up.
+    #[shuttle_entry]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         self.inner.try_recv()
     }
 
     /// Attempts to wait for a value on this receiver, returning an error if the
     /// corresponding channel has hung up, or if it waits more than timeout.
+    #[shuttle_entry]
     pub fn recv_timeout(&self, _timeout: Duration) -> Result<T, RecvTimeoutError> {
         // TODO support the timeout case -- this method never times out
         self.inner.recv().map_err(|_| RecvTimeoutError::Disconnected)
@@ -542,6 +546,7 @@ pub struct Sender<T> {
 impl<T> Sender<T> {
     /// Attempts to send a value on this channel, returning it back if it could
     /// not be sent.
+    #[shuttle_entry]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.inner.send(t)
     }
@@ -590,6 +595,7 @@ impl<T> SyncSender<T> {
     ///
     /// This function will *block* until space in the internal buffer becomes
     /// available or a receiver is available to hand off the message to.
+    #[shuttle_entry]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.inner.send(t)
     }
@@ -602,6 +608,7 @@ impl<T> SyncSender<T> {
     /// instead of one (one for disconnection, one for a full buffer).
     ///
     /// [`send`]: Self::send
+    #[shuttle_entry]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         self.inner.try_send(t)
     }

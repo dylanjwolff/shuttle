@@ -716,7 +716,9 @@ impl ExecutionState {
             s.current_mut().shuttle_depth
         });
 
-        assert_eq!(depth, new_depth);
+        if !std::thread::panicking() {
+            assert_eq!(depth, new_depth);
+        }
     }
 
     pub(crate) fn get_clock_mut(&mut self, id: TaskId) -> &mut VectorClock {

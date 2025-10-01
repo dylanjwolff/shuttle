@@ -3,6 +3,7 @@ use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::TaskId;
 use crate::runtime::thread;
 use crate::sync::{ResourceSignature, ResourceType};
+use shuttle_macros::shuttle_entry;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
@@ -97,6 +98,7 @@ impl Barrier {
     }
 
     /// Blocks the current thread until all threads have rendezvoused here.
+    #[shuttle_entry]
     pub fn wait(&self) -> BarrierWaitResult {
         let mut state = self.state.borrow_mut();
         let my_epoch = state.epoch;

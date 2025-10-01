@@ -4,6 +4,7 @@ use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::{clock::VectorClock, TaskId};
 use crate::runtime::thread;
 use crate::sync::{ResourceSignature, ResourceType};
+use shuttle_macros::shuttle_entry;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt;
@@ -378,6 +379,7 @@ impl BatchSemaphore {
     }
 
     /// Returns the current number of available permits.
+    #[shuttle_entry]
     pub fn available_permits(&self) -> usize {
         let state = self.state.borrow();
         state.permits_available.available()
@@ -392,6 +394,7 @@ impl BatchSemaphore {
 
     /// Closes the semaphore. This prevents the semaphore from issuing new
     /// permits and notifies all pending waiters.
+    #[shuttle_entry]
     pub fn close(&self) {
         self.init_object_id();
         let mut state = self.state.borrow_mut();
@@ -425,6 +428,7 @@ impl BatchSemaphore {
     }
 
     /// Returns true iff the semaphore is closed.
+    #[shuttle_entry]
     pub fn is_closed(&self) -> bool {
         let state = self.state.borrow();
         state.closed
@@ -434,6 +438,7 @@ impl BatchSemaphore {
     /// If the permits are available, returns Ok(())
     /// If the semaphore is closed, returns `Err(TryAcquireError::Closed)`
     /// If there aren't enough permits, returns `Err(TryAcquireError::NoPermits)`
+    #[shuttle_entry]
     pub fn try_acquire(&self, num_permits: usize) -> Result<(), TryAcquireError> {
         self.init_object_id();
         let mut state = self.state.borrow_mut();
@@ -540,19 +545,21 @@ impl BatchSemaphore {
     }
 
     /// Acquire the specified number of permits (async API)
+    #[shuttle_entry]
     pub fn acquire(&self, num_permits: usize) -> Acquire<'_> {
-        crate::shuttle_entry!();
         self.init_object_id();
         Acquire::new(self, num_permits)
     }
 
     /// Acquire the specified number of permits (blocking API)
+    #[shuttle_entry]
     pub fn acquire_blocking(&self, num_permits: usize) -> Result<(), AcquireError> {
         self.init_object_id();
         crate::future::block_on(self.acquire(num_permits))
     }
 
     /// Release `num_permits` back to the Semaphore
+    #[shuttle_entry]
     pub fn release(&self, num_permits: usize) {
         self.init_object_id();
         if num_permits == 0 {
@@ -659,6 +666,7 @@ impl<'a> Acquire<'a> {
 impl Future for Acquire<'_> {
     type Output = Result<(), AcquireError>;
 
+    #[shuttle_entry]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         assert!(!self.completed);
         if self.waiter.has_permits.load(Ordering::SeqCst) {

@@ -2,6 +2,7 @@ use crate::future::batch_semaphore::{BatchSemaphore, Fairness};
 use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::{TaskId, TaskSet};
 use crate::sync::{ResourceSignature, ResourceType};
+use shuttle_macros::shuttle_entry;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display};
 use std::ops::{Deref, DerefMut};
@@ -75,6 +76,7 @@ impl<T> RwLock<T> {
 impl<T: ?Sized> RwLock<T> {
     /// Locks this rwlock with shared read access, blocking the current thread until it can be
     /// acquired.
+    #[shuttle_entry]
     pub fn read(&self) -> LockResult<RwLockReadGuard<'_, T>> {
         self.lock(RwLockType::Read);
 
@@ -95,6 +97,7 @@ impl<T: ?Sized> RwLock<T> {
 
     /// Locks this rwlock with exclusive write access, blocking the current thread until it can
     /// be acquired.
+    #[shuttle_entry]
     pub fn write(&self) -> LockResult<RwLockWriteGuard<'_, T>> {
         self.lock(RwLockType::Write);
 
@@ -120,6 +123,7 @@ impl<T: ?Sized> RwLock<T> {
     ///
     /// Note that unlike [`std::sync::RwLock::try_read`], if the current thread already holds this
     /// read lock, `try_read` will return Err.
+    #[shuttle_entry]
     pub fn try_read(&self) -> TryLockResult<RwLockReadGuard<'_, T>> {
         if self.try_lock(RwLockType::Read) {
             match self.inner.try_read() {
@@ -144,6 +148,7 @@ impl<T: ?Sized> RwLock<T> {
     ///
     /// If the access could not be granted at this time, then Err is returned. This function does
     /// not block.
+    #[shuttle_entry]
     pub fn try_write(&self) -> TryLockResult<RwLockWriteGuard<'_, T>> {
         if self.try_lock(RwLockType::Write) {
             match self.inner.try_write() {
@@ -169,11 +174,13 @@ impl<T: ?Sized> RwLock<T> {
     /// Since this call borrows the `RwLock` mutably, no actual locking needs to
     /// take place---the mutable borrow statically guarantees no locks exist.
     #[inline]
+    #[shuttle_entry]
     pub fn get_mut(&mut self) -> LockResult<&mut T> {
         self.inner.get_mut()
     }
 
     /// Consumes this `RwLock`, returning the underlying data
+    #[shuttle_entry]
     pub fn into_inner(self) -> LockResult<T>
     where
         T: Sized,

@@ -3,6 +3,7 @@
 use crate::runtime::execution::ExecutionState;
 use crate::runtime::task::TaskId;
 use crate::runtime::thread;
+use shuttle_macros::shuttle_entry;
 use std::marker::PhantomData;
 use std::panic::Location;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -42,6 +43,7 @@ impl Thread {
     }
 
     /// Atomically makes the handle's token available if it is not already.
+    #[shuttle_entry]
     pub fn unpark(&self) {
         ExecutionState::with(|s| {
             s.get_mut(self.id.task_id).unpark();
@@ -114,6 +116,7 @@ impl<'scope> Scope<'scope, '_> {
 ///
 /// The function passed to `scope` will be provided a [`Scope`] object,
 /// through which scoped threads can be [spawned][`Scope::spawn`].
+#[shuttle_entry]
 pub fn scope<'env, F, T>(f: F) -> T
 where
     F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T,
@@ -140,6 +143,7 @@ where
 ///
 /// The join handle can be used (via the `join` method) to block until the child thread has
 /// finished.
+#[shuttle_entry]
 #[track_caller]
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
@@ -211,7 +215,12 @@ pub(crate) fn thread_fn<F, T>(f: F, result: std::sync::Arc<std::sync::Mutex<Opti
 where
     F: FnOnce() -> T,
 {
+    ExecutionState::with(|s| s.current_mut().shuttle_depth += 1);
+    ExecutionState::exit_shuttle_at(0);
+
     let ret = f();
+
+    ExecutionState::enter_shuttle_at_depth();
 
     tracing::trace!("thread finished, dropping thread locals");
 
@@ -250,6 +259,7 @@ pub struct ScopedJoinHandle<'scope, T> {
 
 impl<T> ScopedJoinHandle<'_, T> {
     /// Waits for the associated thread to finish.
+    #[shuttle_entry]
     pub fn join(self) -> Result<T> {
         self.handle.join()
     }
@@ -281,6 +291,7 @@ unsafe impl<T> Sync for JoinHandle<T> {}
 
 impl<T> JoinHandle<T> {
     /// Waits for the associated thread to finish.
+    #[shuttle_entry]
     pub fn join(self) -> Result<T> {
         ExecutionState::with(|state| {
             let me = state.current().id();
@@ -313,6 +324,7 @@ impl<T> JoinHandle<T> {
 ///
 /// Some Shuttle schedulers use this as a hint to deprioritize the current thread in order for other
 /// threads to make progress (e.g., in a spin loop).
+#[shuttle_entry]
 pub fn yield_now() {
     let waker = ExecutionState::with(|state| state.current().waker());
     waker.wake_by_ref();
@@ -322,11 +334,13 @@ pub fn yield_now() {
 
 /// Puts the current thread to sleep for at least the specified amount of time.
 // Note that Shuttle does not model time, so this behaves just like a context switch.
+#[shuttle_entry]
 pub fn sleep(_dur: Duration) {
     thread::switch();
 }
 
 /// Get a handle to the thread that invokes it
+#[shuttle_entry]
 pub fn current() -> Thread {
     let (task_id, name) = ExecutionState::with(|s| {
         let me = s.current();
@@ -340,6 +354,7 @@ pub fn current() -> Thread {
 }
 
 /// Blocks unless or until the current thread's token is made available (may wake spuriously).
+#[shuttle_entry]
 pub fn park() {
     let switch = ExecutionState::with(|s| s.current_mut().park());
 
@@ -361,6 +376,7 @@ pub fn park() {
 /// Note that Shuttle does not model time, so this behaves identically to `park`. In particular,
 /// Shuttle does not assume that the timeout will ever fire, so if all threads are blocked in a call
 /// to `park_timeout` it will be treated as a deadlock.
+#[shuttle_entry]
 pub fn park_timeout(_dur: Duration) {
     park();
 }
