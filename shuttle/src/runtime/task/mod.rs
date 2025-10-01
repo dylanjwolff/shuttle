@@ -301,6 +301,8 @@ pub struct Task {
     /// stable across iterations in a single Shuttle test. Tasks with the same signature are very likely to exhibit
     /// similar behavior
     pub(crate) signature: TaskSignature,
+
+    pub(crate) shuttle_depth: u64,
 }
 
 #[allow(deprecated)]
@@ -351,6 +353,7 @@ impl Task {
             tag: None,
             backtrace: Backtrace::disabled(),
             signature,
+            shuttle_depth: 0,
         };
 
         if let Some(tag) = tag {

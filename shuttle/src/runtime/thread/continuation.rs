@@ -256,6 +256,8 @@ unsafe impl Send for PooledContinuation {}
 
 /// Possibly yield back to the executor to perform a context switch.
 pub(crate) fn switch() {
+    // assert_ne!(ExecutionState::with(|s| s.current().shuttle_depth), 0);
+
     crate::annotations::record_tick();
     if ExecutionState::maybe_yield() {
         let r = generator::yield_(ContinuationOutput::Yielded).unwrap();

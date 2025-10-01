@@ -23,6 +23,15 @@ use tracing::{trace, Span};
 #[allow(deprecated)]
 use super::task::Tag;
 
+/// Macro for entering shuttle at depth and ensuring proper cleanup on exit
+#[macro_export]
+macro_rules! shuttle_entry {
+    () => {
+        let depth = $crate::runtime::execution::ExecutionState::enter_shuttle_at_depth();
+        scopeguard::defer!($crate::runtime::execution::ExecutionState::exit_shuttle_at(depth));
+    };
+}
+
 // We use this scoped TLS to smuggle the ExecutionState, which is not 'static, across tasks that
 // need access to it (to spawn new tasks, interrogate task status, etc).
 scoped_thread_local! {
@@ -683,6 +692,31 @@ impl ExecutionState {
 
     pub(crate) fn get_clock(&self, id: TaskId) -> &VectorClock {
         &self.tasks.get(id.0).unwrap().clock
+    }
+
+    #[track_caller]
+    pub(crate) fn enter_shuttle_at_depth() -> u64 {
+        let old_depth = ExecutionState::with(|s| {
+            let old_depth = s.current().shuttle_depth;
+            s.current_mut().shuttle_depth = old_depth + 1;
+            old_depth
+        });
+
+        if old_depth == 0 {
+            println!("Entering shuttle from {}", Location::caller());
+        }
+
+        old_depth
+    }
+
+    #[track_caller]
+    pub(crate) fn exit_shuttle_at(depth: u64) {
+        let new_depth = ExecutionState::with(|s| {
+            s.current_mut().shuttle_depth -= 1;
+            s.current_mut().shuttle_depth
+        });
+
+        assert_eq!(depth, new_depth);
     }
 
     pub(crate) fn get_clock_mut(&mut self, id: TaskId) -> &mut VectorClock {

@@ -541,6 +541,7 @@ impl BatchSemaphore {
 
     /// Acquire the specified number of permits (async API)
     pub fn acquire(&self, num_permits: usize) -> Acquire<'_> {
+        crate::shuttle_entry!();
         self.init_object_id();
         Acquire::new(self, num_permits)
     }
