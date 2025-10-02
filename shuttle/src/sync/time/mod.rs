@@ -264,6 +264,18 @@ impl Instant {
         self.checked_sub(earlier)
     }
 
+    /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
+    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
+    pub fn duration_since(&self, earlier: Instant) -> Duration {
+        self.checked_sub(earlier).unwrap()
+    }
+
+    /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
+    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
+    pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
+        self.checked_sub(earlier).unwrap_or(Duration::ZERO)
+    }
+
     /// Returns Some(t) where t is the time self + duration if t can be represented as Instant (which means it’s inside the bounds
     /// of the underlying data structure), None otherwise.
     pub fn checked_add(&self, duration: Duration) -> Option<Self> {
