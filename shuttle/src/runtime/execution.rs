@@ -739,6 +739,7 @@ impl ExecutionState {
     }
 
     /// Block the current task with split borrow
+    #[inline(always)]
     pub(crate) fn block_current(&mut self, allow_spurious_wakeups: bool) {
         let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
@@ -749,6 +750,7 @@ impl ExecutionState {
     }
 
     /// Block a specific task with split borrow
+    #[inline(always)]
     pub(crate) fn block_task(&mut self, task_id: TaskId, allow_spurious_wakeups: bool) {
         let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[task_id.0],
@@ -759,6 +761,7 @@ impl ExecutionState {
     }
 
     /// Unblock a specific task with split borrow
+    #[inline(always)]
     pub(crate) fn unblock_task(&mut self, task_id: TaskId) {
         let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[task_id.0],
@@ -769,6 +772,7 @@ impl ExecutionState {
     }
 
     /// Finish the current task with split borrow
+    #[inline(always)]
     pub(crate) fn finish_current(&mut self) {
         let (task, runnable_tasks, num_unfinished_attached, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
@@ -780,6 +784,7 @@ impl ExecutionState {
     }
 
     /// Make current task pending unless woken with split borrow
+    #[inline(always)]
     pub(crate) fn sleep_current_unless_woken(&mut self) {
         let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
@@ -790,6 +795,7 @@ impl ExecutionState {
     }
 
     /// Park the current task with split borrow
+    #[inline(always)]
     pub(crate) fn park_current(&mut self) -> bool {
         let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[self.current_task.id().unwrap().0],
@@ -800,6 +806,7 @@ impl ExecutionState {
     }
 
     /// Unpark a specific task with split borrow
+    #[inline(always)]
     pub(crate) fn unpark_task(&mut self, task_id: TaskId) {
         let (task, runnable_tasks, num_runnable) = (
             &mut self.tasks[task_id.0],

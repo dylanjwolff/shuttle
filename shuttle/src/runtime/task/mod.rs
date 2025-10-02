@@ -18,7 +18,7 @@ use std::panic::Location;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Waker};
-use tracing::{error_span, event, field, trace, Level, Span};
+use tracing::{error_span, event, field, Level, Span};
 
 pub(crate) mod clock;
 pub(crate) mod labels;
@@ -457,18 +457,20 @@ impl Task {
         self.waker.clone()
     }
 
-    fn is_schedulable(&self) -> bool {
-        match self.state {
-            TaskState::Runnable => true,
-            TaskState::Blocked { allow_spurious_wakeups } => allow_spurious_wakeups,
-            TaskState::Sleeping => false,
-            TaskState::Finished => false,
+    /// Helper to remove a task from schedulable_tasks by position and update swapped task position
+    #[inline(always)]
+    fn remove_from_schedulable_tasks(&mut self, runnable_tasks: &mut Vec<*const Task>) {
+        if let Some(pos) = self.schedulable_position {
+            unsafe { (*(runnable_tasks[runnable_tasks.len() - 1] as *mut Task)).schedulable_position = Some(pos) };
+            let _removed_task = runnable_tasks.swap_remove(pos);
+            self.schedulable_position = None;
         }
     }
 
     /// Block the current thread. If `allow_spurious_wakeups` is true, then the scheduler is
     /// permitted to spuriously wake up the thread (though it will still not count as a live thread
     /// for deadlock detection purposes for as long as it remains blocked).
+    #[inline(always)]
     pub(crate) fn block(
         &mut self,
         allow_spurious_wakeups: bool,
@@ -479,59 +481,55 @@ impl Task {
         self.backtrace = Backtrace::capture();
 
         assert!(self.state != TaskState::Finished);
-        let was_runnable = self.is_schedulable();
+
+        // Update num_runnable if transitioning from Runnable state
         if self.state == TaskState::Runnable {
-            *num_runnable -= 1
-        };
+            *num_runnable -= 1;
+        }
+
         self.state = TaskState::Blocked { allow_spurious_wakeups };
-        if was_runnable && !allow_spurious_wakeups {
-            if let Some(pos) = self.schedulable_position.take() {
-                let _removed_task = runnable_tasks.swap_remove(pos);
-                // If we swapped with the last element, update the position of the swapped task
-                if pos < runnable_tasks.len() {
-                    // SAFETY: The task pointer is valid because it was just moved from the end
-                    unsafe { (*(runnable_tasks[pos] as *mut Task)).schedulable_position = Some(pos) };
-                }
-            }
+
+        // Remove from schedulable_tasks if not allowing spurious wakeups and currently schedulable
+        if !allow_spurious_wakeups {
+            self.remove_from_schedulable_tasks(runnable_tasks);
         }
     }
 
+    #[inline(always)]
     pub(crate) fn sleep(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
         // `Backtrace::capture()` is a noop (it returns the constant `disabled()`) if `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` is not set.
         self.backtrace = Backtrace::capture();
-        trace!("sleep");
 
         assert!(self.state != TaskState::Finished);
-        let was_runnable = self.is_schedulable();
+
+        // Update num_runnable if transitioning from Runnable state
         if self.state == TaskState::Runnable {
-            *num_runnable -= 1
-        };
-        self.state = TaskState::Sleeping;
-        if was_runnable {
-            if let Some(pos) = self.schedulable_position.take() {
-                let _removed_task = runnable_tasks.swap_remove(pos);
-                // If we swapped with the last element, update the position of the swapped task
-                if pos < runnable_tasks.len() {
-                    // SAFETY: The task pointer is valid because it was just moved from the end
-                    unsafe { (*(runnable_tasks[pos] as *mut Task)).schedulable_position = Some(pos) };
-                }
-            }
+            *num_runnable -= 1;
         }
+
+        self.state = TaskState::Sleeping;
+
+        // Remove from schedulable_tasks if currently there
+        self.remove_from_schedulable_tasks(runnable_tasks);
     }
 
+    #[inline(always)]
     pub(crate) fn unblock(&mut self, runnable_tasks: &mut Vec<*const Task>, num_runnable: &mut u32) {
         // Note we don't assert the task is blocked here. For example, a task invoking its own waker
         // will not be blocked when this is called.
         assert!(self.state != TaskState::Finished);
-        let was_runnable = self.is_schedulable();
+
+        // Update num_runnable if transitioning to Runnable state
         if self.state != TaskState::Runnable {
-            *num_runnable += 1
-        };
+            *num_runnable += 1;
+        }
+
         self.state = TaskState::Runnable;
-        if !was_runnable {
-            let task_position = runnable_tasks.len();
+
+        // Add to schedulable_tasks if not already there
+        if self.schedulable_position.is_none() {
+            self.schedulable_position = Some(runnable_tasks.len());
             runnable_tasks.push(self as *const Task);
-            self.schedulable_position = Some(task_position);
         }
 
         // When a task gets unblocked, it's definitely no longer blocked in a call to `park`. This
@@ -541,32 +539,27 @@ impl Task {
         self.park_state.blocked_in_park = false;
     }
 
+    #[inline(always)]
     pub(crate) fn finish(
         &mut self,
         runnable_tasks: &mut Vec<*const Task>,
         num_unfinished_attached: &mut u32,
         num_runnable: &mut u32,
     ) {
-        trace!("finish");
         assert!(self.state != TaskState::Finished);
-        let was_runnable = self.is_schedulable();
+
+        // Update num_runnable if transitioning from Runnable state
         if self.state == TaskState::Runnable {
-            *num_runnable -= 1
-        };
+            *num_runnable -= 1;
+        }
+
         if !self.detached {
             *num_unfinished_attached -= 1;
         }
+
         self.state = TaskState::Finished;
-        if was_runnable {
-            if let Some(pos) = self.schedulable_position.take() {
-                let _removed_task = runnable_tasks.swap_remove(pos);
-                // If we swapped with the last element, update the position of the swapped task
-                if pos < runnable_tasks.len() {
-                    // SAFETY: The task pointer is valid because it was just moved from the end
-                    unsafe { (*(runnable_tasks[pos] as *mut Task)).schedulable_position = Some(pos) };
-                }
-            }
-        }
+
+        self.remove_from_schedulable_tasks(runnable_tasks);
     }
 
     /// Potentially put this task to sleep after it was polled by the executor, unless someone has
