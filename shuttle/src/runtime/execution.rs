@@ -18,6 +18,7 @@ use std::future::Future;
 use std::panic::{self, Location};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::u64;
 use tracing::{trace, Span};
 
 #[allow(deprecated)]
@@ -398,11 +399,15 @@ impl ExecutionState {
     /// access to the state of the execution to influence scheduling (e.g. to register a task as
     /// blocked).
     #[inline]
+    #[track_caller]
     pub(crate) fn with<F, T>(f: F) -> T
     where
         F: FnOnce(&mut ExecutionState) -> T,
     {
-        Self::try_with(f).expect("Shuttle internal error: cannot access ExecutionState. are you trying to access a Shuttle primitive from outside a Shuttle test?")
+        println!("Enter ExecutionState::with from {}", Location::caller());
+        let r = Self::try_with(f).expect("Shuttle internal error: cannot access ExecutionState. are you trying to access a Shuttle primitive from outside a Shuttle test?");
+        println!("Exit ExecutionState::with from {}", Location::caller());
+        return r;
     }
 
     /// Like `with`, but returns None instead of panicking if there is no current ExecutionState or
@@ -712,6 +717,10 @@ impl ExecutionState {
         self.get_mut(self.current_task.id().unwrap())
     }
 
+    pub(crate) fn try_current_mut(&mut self) -> Option<&mut Task> {
+        self.current_task.id().map(|id| self.get_mut(id))
+    }
+
     pub(crate) fn try_current(&self) -> Option<&Task> {
         self.try_get(self.current_task.id()?)
     }
@@ -758,14 +767,15 @@ impl ExecutionState {
     #[track_caller]
     pub(crate) fn enter_shuttle_at_depth() -> u64 {
         let old_depth = ExecutionState::with(|s| {
-            let old_depth = s.current().shuttle_depth;
-            s.current_mut().shuttle_depth = old_depth + 1;
-            old_depth
+            s.try_current_mut().map(|t| {
+                let old_depth = t.shuttle_depth;
+                t.shuttle_depth = old_depth + 1;
+                old_depth
+            }).unwrap_or(u64::MAX)
         });
 
-        if old_depth == 0 {
-            println!("Entering shuttle from {}", Location::caller());
-        }
+        // if old_depth == 0 { println!("Entering shuttle from {}", Location::caller()); }
+        println!("Entering shuttle from {} @ {:?}", Location::caller(), old_depth);
 
         old_depth
     }
@@ -773,10 +783,13 @@ impl ExecutionState {
     #[track_caller]
     pub(crate) fn exit_shuttle_at(depth: u64) {
         let new_depth = ExecutionState::with(|s| {
-            s.current_mut().shuttle_depth -= 1;
-            s.current_mut().shuttle_depth
+            s.try_current_mut().map(|t| {
+                t.shuttle_depth -= 1;
+                t.shuttle_depth
+            }).unwrap_or(u64::MAX)
         });
 
+        println!("Leaving  shuttle from {} @ {} (vs. {})", Location::caller(), new_depth, depth);
         if !std::thread::panicking() {
             assert_eq!(depth, new_depth);
         }
