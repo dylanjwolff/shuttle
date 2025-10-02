@@ -252,28 +252,30 @@ impl Instant {
 
     /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
     /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
-    pub fn checked_sub(&self, earlier: Instant) -> Option<Duration> {
-        match (self, earlier) {
-            (Instant::Simulated(a), Instant::Simulated(b)) => a.checked_sub(b).map(Duration::Std),
+    pub fn checked_sub(&self, duration: Duration) -> Option<Duration> {
+        match (self, duration) {
+            (Instant::Simulated(a), Duration::Std(b)) => a.checked_sub(b).map(Duration::Std),
         }
     }
 
     /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
     /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
     pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
-        self.checked_sub(earlier)
+        match (self, earlier) {
+            (Instant::Simulated(a), Instant::Simulated(b)) => a.checked_sub(b).map(Duration::Std),
+        }
     }
 
     /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
     /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
     pub fn duration_since(&self, earlier: Instant) -> Duration {
-        self.checked_sub(earlier).unwrap()
+        self.checked_duration_since(earlier).unwrap()
     }
 
     /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
     /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
     pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
-        self.checked_sub(earlier).unwrap_or(Duration::ZERO)
+        self.checked_duration_since(earlier).unwrap_or(Duration::ZERO)
     }
 
     /// Returns Some(t) where t is the time self + duration if t can be represented as Instant (which means it’s inside the bounds
@@ -312,7 +314,7 @@ impl Sub<Instant> for Instant {
     type Output = Duration;
 
     fn sub(self, earlier: Instant) -> Duration {
-        self.checked_sub(earlier).unwrap()
+        self.checked_duration_since(earlier).unwrap()
     }
 }
 
