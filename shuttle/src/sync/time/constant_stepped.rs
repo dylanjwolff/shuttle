@@ -101,7 +101,7 @@ impl TimeModel for ConstantSteppedTimeModel {
     }
 
     fn advance(&mut self, dur: Duration) {
-        self.current_time_elapsed += dur.unwrap_std();
+        self.current_time_elapsed += super::duration_to_std(dur);
     }
 
     fn register_sleep(&mut self, deadline: Instant, sleep_id: u64, waker: Option<Waker>) -> bool {

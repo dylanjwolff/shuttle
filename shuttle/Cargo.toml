@@ -55,6 +55,7 @@ annotation = ["dep:serde", "dep:serde_json", "dep:regex"]
 # are otherwise always enabled via a dev-dependency to ensure all *test* assertions utilizing vector
 # clocks behave correctly during testing
 bench-no-vector-clocks = []
+advanced-time-models = []
 
 [[bench]]
 name = "lock"
