@@ -179,6 +179,119 @@ mod advanced_duration {
             }
         }
 
+        /// Checked Duration division. Computes self / other, returning None if other is zero or overflow occurred.
+        pub fn checked_div(&self, rhs: u32) -> Option<Self> {
+            match self {
+                Duration::Std(a) => a.checked_div(rhs).map(Duration::Std),
+            }
+        }
+
+        /// Saturating Duration addition. Computes self + other, returning Duration::MAX if overflow occurred.
+        pub fn saturating_add(&self, other: Duration) -> Self {
+            match (self, other) {
+                (Duration::Std(a), Duration::Std(b)) => Duration::Std(a.saturating_add(b)),
+            }
+        }
+
+        /// Saturating Duration subtraction. Computes self - other, returning Duration::ZERO if other is greater than self.
+        pub fn saturating_sub(&self, other: Duration) -> Self {
+            match (self, other) {
+                (Duration::Std(a), Duration::Std(b)) => Duration::Std(a.saturating_sub(b)),
+            }
+        }
+
+        /// Saturating Duration multiplication. Computes self * other, returning Duration::MAX if overflow occurred.
+        pub fn saturating_mul(&self, rhs: u32) -> Self {
+            match self {
+                Duration::Std(a) => Duration::Std(a.saturating_mul(rhs)),
+            }
+        }
+
+        /// Multiplies Duration by f32.
+        pub fn mul_f32(&self, rhs: f32) -> Self {
+            match self {
+                Duration::Std(a) => Duration::Std(a.mul_f32(rhs)),
+            }
+        }
+
+        /// Multiplies Duration by f64.
+        pub fn mul_f64(&self, rhs: f64) -> Self {
+            match self {
+                Duration::Std(a) => Duration::Std(a.mul_f64(rhs)),
+            }
+        }
+
+        /// Divides Duration by f32.
+        pub fn div_f32(&self, rhs: f32) -> Self {
+            match self {
+                Duration::Std(a) => Duration::Std(a.div_f32(rhs)),
+            }
+        }
+
+        /// Divides Duration by f64.
+        pub fn div_f64(&self, rhs: f64) -> Self {
+            match self {
+                Duration::Std(a) => Duration::Std(a.div_f64(rhs)),
+            }
+        }
+
+        /// Returns the number of seconds contained by this Duration as f64.
+        pub fn as_secs_f64(&self) -> f64 {
+            match self {
+                Duration::Std(d) => d.as_secs_f64(),
+            }
+        }
+
+        /// Returns the number of seconds contained by this Duration as f32.
+        pub fn as_secs_f32(&self) -> f32 {
+            match self {
+                Duration::Std(d) => d.as_secs_f32(),
+            }
+        }
+
+        /// Returns the total number of whole seconds contained by this Duration.
+        pub fn as_secs(&self) -> u64 {
+            match self {
+                Duration::Std(d) => d.as_secs(),
+            }
+        }
+
+        /// Returns the fractional part of this Duration, in whole milliseconds.
+        pub fn subsec_millis(&self) -> u32 {
+            match self {
+                Duration::Std(d) => d.subsec_millis(),
+            }
+        }
+
+        /// Returns the fractional part of this Duration, in whole microseconds.
+        pub fn subsec_micros(&self) -> u32 {
+            match self {
+                Duration::Std(d) => d.subsec_micros(),
+            }
+        }
+
+        /// Returns the fractional part of this Duration, in nanoseconds.
+        pub fn subsec_nanos(&self) -> u32 {
+            match self {
+                Duration::Std(d) => d.subsec_nanos(),
+            }
+        }
+
+        /// Creates a new Duration from the specified number of whole seconds and additional nanoseconds.
+        pub fn new(secs: u64, nanos: u32) -> Self {
+            Duration::Std(std::time::Duration::new(secs, nanos))
+        }
+
+        /// Creates a new Duration from the specified number of seconds represented as f64.
+        pub fn from_secs_f64(secs: f64) -> Self {
+            Duration::Std(std::time::Duration::from_secs_f64(secs))
+        }
+
+        /// Creates a new Duration from the specified number of seconds represented as f32.
+        pub fn from_secs_f32(secs: f32) -> Self {
+            Duration::Std(std::time::Duration::from_secs_f32(secs))
+        }
+
         pub(crate) fn unwrap_std(self) -> std::time::Duration {
             match self {
                 Duration::Std(d) => d,
@@ -233,6 +346,40 @@ mod advanced_duration {
 
         fn mul(self, other: Duration) -> Duration {
             other.checked_mul(self).unwrap()
+        }
+    }
+
+    impl std::ops::Div<u32> for Duration {
+        type Output = Duration;
+
+        fn div(self, rhs: u32) -> Duration {
+            self.checked_div(rhs).unwrap()
+        }
+    }
+
+    impl std::ops::DivAssign<u32> for Duration {
+        fn div_assign(&mut self, rhs: u32) {
+            *self = self.checked_div(rhs).unwrap()
+        }
+    }
+
+    impl From<std::time::Duration> for Duration {
+        fn from(d: std::time::Duration) -> Self {
+            Duration::Std(d)
+        }
+    }
+
+    impl From<Duration> for std::time::Duration {
+        fn from(d: Duration) -> Self {
+            d.unwrap_std()
+        }
+    }
+
+    impl std::ops::Sub for Duration {
+        type Output = Duration;
+
+        fn sub(self, other: Self) -> Self {
+            self.checked_sub(other).unwrap()
         }
     }
 }
