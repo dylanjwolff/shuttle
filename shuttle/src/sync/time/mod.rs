@@ -503,6 +503,13 @@ impl Instant {
             .checked_duration_since(*self)
             .unwrap_or(Duration::from_secs(0))
     }
+
+    /// Returns t where t is the time self + duration if t can be represented as Instant otherwise it saturates to the maximum time value
+    pub fn saturating_add(&self, duration: Duration) -> Self {
+        match self {
+            Instant::Simulated(_) => self.checked_add(duration).unwrap_or(Instant::Simulated(Duration::MAX)),
+        }
+    }
 }
 
 impl Add<Duration> for Instant {
@@ -578,7 +585,7 @@ pub fn async_sleep(dur: Duration) -> Sleep {
     let id = increment_timer_counter();
     Sleep {
         id,
-        deadline: Instant::now().checked_add(dur).unwrap(),
+        deadline: Instant::now().saturating_add(dur),
     }
 }
 
@@ -750,7 +757,7 @@ where
     let id = increment_timer_counter();
     Timeout {
         id,
-        deadline: Instant::now() + d,
+        deadline: Instant::now().saturating_add(d),
         future: f,
     }
 }
