@@ -116,6 +116,13 @@ impl Execution {
             Finished,
         }
 
+        // While there are no runnable tasks and tasks are able to be woken by the time model, continue waking tasks
+        while ExecutionState::num_runnable() == 0
+            && ExecutionState::with(|s| Rc::clone(&s.time_model))
+                .borrow_mut()
+                .wake_next()
+        {}
+
         let next_step = ExecutionState::with(|state| {
             if let Err(msg) = state.schedule() {
                 return NextStep::Failure(msg, state.current_schedule.clone());
@@ -589,6 +596,13 @@ impl ExecutionState {
     /// is different from the currently running task, indicating that the current task should yield
     /// its execution.
     pub(crate) fn maybe_yield() -> bool {
+        // While there are no runnable tasks and tasks are able to be woken by the time model, continue waking tasks
+        while ExecutionState::num_runnable() == 0
+            && ExecutionState::with(|s| Rc::clone(&s.time_model))
+                .borrow_mut()
+                .wake_next()
+        {}
+
         Self::with(|state| {
             debug_assert!(
                 matches!(state.current_task, ScheduledTask::Some(_)) && state.next_task == ScheduledTask::None,
