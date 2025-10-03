@@ -688,6 +688,11 @@ impl Interval {
         deadline
     }
 
+    /// period for an Interval
+    pub fn period(&self) -> Duration {
+        self.period
+    }
+
     fn next_deadline(&mut self) -> Instant {
         if let Some(start) = self.start {
             let mut total_duration = Duration::ZERO;
