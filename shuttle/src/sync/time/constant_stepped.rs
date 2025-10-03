@@ -100,8 +100,9 @@ impl TimeModel for ConstantSteppedTimeModel {
         true
     }
 
+    #[allow(clippy::useless_conversion)]
     fn advance(&mut self, dur: Duration) {
-        self.current_time_elapsed += super::duration_to_std(dur);
+        self.current_time_elapsed += dur.into();
     }
 
     fn register_sleep(&mut self, deadline: Instant, sleep_id: u64, waker: Option<Waker>) -> bool {

@@ -109,10 +109,16 @@ mod advanced_duration {
     use super::*;
 
     /// A Shuttle duration
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
     pub enum Duration {
         /// A concrete duration value
         Std(std::time::Duration),
+    }
+
+    impl Default for Duration {
+        fn default() -> Self {
+            Duration::Std(std::time::Duration::ZERO)
+        }
     }
 
     impl Duration {
@@ -390,22 +396,84 @@ pub use advanced_duration::Duration;
 #[cfg(not(feature = "advanced-time-models"))]
 pub use std::time::Duration;
 
-pub(crate) fn duration_to_std(dur: Duration) -> std::time::Duration {
-    #[cfg(feature = "advanced-time-models")]
-    {
-        dur.unwrap_std()
-    }
-    #[cfg(not(feature = "advanced-time-models"))]
-    {
-        dur
-    }
-}
-
 /// A Shuttle Instant
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Instant {
     /// Deterministically simulated clock time represented by a Duration from the start of the test
     Simulated(std::time::Duration),
+}
+
+#[cfg(feature = "advanced-time-models")]
+impl Instant {
+    /// Returns Some(t) where t is the time self - duration if t can be represented as Instant (which means it’s inside the bounds of the underlying data structure), None otherwise.
+    pub fn checked_sub(&self, duration: Duration) -> Option<Instant> {
+        match self {
+            Instant::Simulated(a) => match duration {
+                Duration::Std(b) => a.checked_sub(b).map(Instant::Simulated),
+            },
+        }
+    }
+
+    /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
+    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
+    pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
+        match (self, earlier) {
+            (Instant::Simulated(a), Instant::Simulated(b)) => a.checked_sub(b).map(Duration::Std),
+        }
+    }
+
+    /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
+    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
+    pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
+        {
+            self.checked_duration_since(earlier).unwrap_or(Duration::ZERO)
+        }
+    }
+
+    /// Returns Some(t) where t is the time self + duration if t can be represented as Instant (which means it's inside the bounds
+    /// of the underlying data structure), None otherwise.
+    pub fn checked_add(&self, duration: Duration) -> Option<Self> {
+        match self {
+            Instant::Simulated(a) => match duration {
+                Duration::Std(b) => a.checked_add(b).map(Instant::Simulated),
+            },
+        }
+    }
+}
+
+#[cfg(not(feature = "advanced-time-models"))]
+impl Instant {
+    /// Returns Some(t) where t is the time self - duration if t can be represented as Instant (which means it’s inside the bounds of the underlying data structure), None otherwise.
+    pub fn checked_sub(&self, duration: Duration) -> Option<Instant> {
+        match self {
+            Instant::Simulated(a) => a.checked_sub(duration).map(Instant::Simulated),
+        }
+    }
+
+    /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
+    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
+    pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
+        match (self, earlier) {
+            (Instant::Simulated(a), Instant::Simulated(b)) => a.checked_sub(b),
+        }
+    }
+
+    /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
+    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
+    pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
+        {
+            self.checked_duration_since(earlier)
+                .unwrap_or(std::time::Duration::ZERO)
+        }
+    }
+
+    /// Returns Some(t) where t is the time self + duration if t can be represented as Instant (which means it's inside the bounds
+    /// of the underlying data structure), None otherwise.
+    pub fn checked_add(&self, duration: Duration) -> Option<Self> {
+        match self {
+            Instant::Simulated(a) => a.checked_add(duration).map(Instant::Simulated),
+        }
+    }
 }
 
 impl Instant {
@@ -421,79 +489,10 @@ impl Instant {
         }
     }
 
-    /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
-    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
-    pub fn checked_sub(&self, duration: Duration) -> Option<Duration> {
-        match self {
-            Instant::Simulated(a) => {
-                #[cfg(feature = "advanced-time-models")]
-                {
-                    match duration {
-                        Duration::Std(b) => a.checked_sub(b).map(Duration::Std),
-                    }
-                }
-                #[cfg(not(feature = "advanced-time-models"))]
-                {
-                    a.checked_sub(duration)
-                }
-            }
-        }
-    }
-
-    /// Returns the amount of time elapsed from another instant to this one, or None if that instant is later than this one.
-    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can return None.
-    pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
-        match (self, earlier) {
-            (Instant::Simulated(a), Instant::Simulated(b)) => {
-                #[cfg(feature = "advanced-time-models")]
-                {
-                    a.checked_sub(b).map(Duration::Std)
-                }
-                #[cfg(not(feature = "advanced-time-models"))]
-                {
-                    a.checked_sub(b)
-                }
-            }
-        }
-    }
-
     /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
     /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
     pub fn duration_since(&self, earlier: Instant) -> Duration {
         self.checked_duration_since(earlier).unwrap()
-    }
-
-    /// Returns the amount of time elapsed from another instant to this one, or panics if that instant is later than this one.
-    /// Due to monotonicity bugs, even under correct logical ordering of the passed Instants, this method can panic.
-    pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
-        #[cfg(feature = "advanced-time-models")]
-        {
-            self.checked_duration_since(earlier).unwrap_or(Duration::ZERO)
-        }
-        #[cfg(not(feature = "advanced-time-models"))]
-        {
-            self.checked_duration_since(earlier)
-                .unwrap_or(std::time::Duration::ZERO)
-        }
-    }
-
-    /// Returns Some(t) where t is the time self + duration if t can be represented as Instant (which means it's inside the bounds
-    /// of the underlying data structure), None otherwise.
-    pub fn checked_add(&self, duration: Duration) -> Option<Self> {
-        match self {
-            Instant::Simulated(a) => {
-                #[cfg(feature = "advanced-time-models")]
-                {
-                    match duration {
-                        Duration::Std(b) => a.checked_add(b).map(Instant::Simulated),
-                    }
-                }
-                #[cfg(not(feature = "advanced-time-models"))]
-                {
-                    a.checked_add(duration).map(Instant::Simulated)
-                }
-            }
-        }
     }
 
     /// Returns the amount of time elapsed since this instant.
@@ -538,20 +537,7 @@ impl Sub<Duration> for Instant {
     type Output = Instant;
 
     fn sub(self, other: Duration) -> Instant {
-        match self {
-            Instant::Simulated(i) => {
-                #[cfg(feature = "advanced-time-models")]
-                {
-                    match other {
-                        Duration::Std(d) => Instant::Simulated(i - d),
-                    }
-                }
-                #[cfg(not(feature = "advanced-time-models"))]
-                {
-                    Instant::Simulated(i - other)
-                }
-            }
-        }
+        self.checked_sub(other).unwrap()
     }
 }
 
@@ -682,6 +668,17 @@ pub struct Interval {
     current_interval: Option<Pin<Box<Sleep>>>,
 }
 
+/// Missed tick behavior for Interval
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissedTickBehavior {
+    /// Ticks as fast as possible until caught up.
+    Burst,
+    /// Tick at multiples of period from when tick was called, rather than from start.
+    Delay,
+    /// Skips missed ticks and tick on the next multiple of period from start.
+    Skip,
+}
+
 impl Interval {
     /// tick
     pub async fn tick(&mut self) -> Instant {
@@ -727,6 +724,17 @@ impl Interval {
             x.as_mut().reset(Instant::now());
         }
     }
+
+    /// Unimplemented
+    pub fn set_missed_tick_behavior(&mut self, _behavior: MissedTickBehavior) {
+        warn!("set missed tick behavior unimplemented: no effect!");
+    }
+
+    /// Unimplemented
+    pub fn missed_tick_behavior(&mut self) -> MissedTickBehavior {
+        warn!("set missed tick behavior unimplemented: no effect!");
+        MissedTickBehavior::Burst
+    }
 }
 
 /// Timeout a future
@@ -756,8 +764,22 @@ where
 }
 
 /// Elapsed time error variant
-#[derive(Debug, Clone, Copy)]
-pub struct Elapsed;
+#[derive(Debug, PartialEq, Eq)]
+pub struct Elapsed(());
+
+impl std::fmt::Display for Elapsed {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        "deadline has elapsed".fmt(fmt)
+    }
+}
+
+impl std::error::Error for Elapsed {}
+
+impl From<Elapsed> for std::io::Error {
+    fn from(_err: Elapsed) -> std::io::Error {
+        std::io::ErrorKind::TimedOut.into()
+    }
+}
 
 impl<F> Future for Timeout<F>
 where
@@ -771,7 +793,7 @@ where
         let tm = get_time_model();
         let expired = tm.borrow_mut().register_sleep(*this.deadline, *this.id, None);
         if expired {
-            return Poll::Ready(Err(Elapsed));
+            return Poll::Ready(Err(Elapsed(())));
         }
 
         match this.future.poll(cx) {
@@ -780,7 +802,7 @@ where
                     .borrow_mut()
                     .register_sleep(*this.deadline, *this.id, Some(cx.waker().clone()));
                 if expired {
-                    return Poll::Ready(Err(Elapsed));
+                    return Poll::Ready(Err(Elapsed(())));
                 }
                 Poll::Pending
             }
