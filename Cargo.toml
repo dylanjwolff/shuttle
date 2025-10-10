@@ -5,3 +5,6 @@ members = [
 ]
 
 resolver = "2"
+
+[patch.crates-io]
+corosensei = { git = "https://github.com/Amanieu/corosensei.git", branch = "unwind-harder" }
